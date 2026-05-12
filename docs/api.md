@@ -54,6 +54,20 @@
 }
 ```
 
+说明：
+
+- `POST /admin/register/` 仅允许已登录管理员调用，用于注册新的管理员账号
+
+### 3.3 管理员登出
+
+- 方法：`POST`
+- 路径：`/admin/logout/`
+- 权限：管理员
+
+说明：
+
+- 调用后会清除当前管理员登录会话
+
 ## 4. 公共查询接口
 
 ### 4.1 宠物列表
@@ -297,14 +311,33 @@
   "jp_name": "ピカチュウ",
   "en_name": "Pikachu",
   "feature_ids": [1, 2],
+  "generation_id": 1,
   "rance_id": 3,
   "skill_ids": [10, 11]
 }
 ```
 
+### 5.1.1 修改宠物
+
+- 方法：`GET` `PUT` `PATCH`
+- 路径：`/admin/pets/{id}/`
+- 权限：管理员
+
+请求体：
+
+- `PUT`：参数与创建宠物一致，需完整提交
+- `PATCH`：按需传入要修改的字段
+
+说明：
+
+- 支持修改 `icon_urls`、`name`、`jp_name`、`en_name`、`feature_ids`、`generation_id`、`rance_id`、`skill_ids`
+- 传入 `icon_urls` 时会整体替换当前宠物图片，第一张仍作为封面
+- 传入 `feature_ids`、`generation_id`、`rance_id`、`skill_ids` 时会替换对应关联
+
 说明：
 
 - `icon_urls`、`feature_ids`、`skill_ids` 会自动去重
+- `generation_id` 为必传
 - 第一个图片会作为封面
 - 会校验特性、种族、技能是否存在
 
@@ -599,8 +632,11 @@
 ### 7.2 管理员接口
 
 - `POST /admin/login/`
+- `POST /admin/logout/`
 - `POST /admin/register/`
+- `POST /admin/pets/import-csv/`
 - `POST /admin/pets/`
+- `GET|PUT|PATCH|DELETE /admin/pets/{id}/`
 - `GET|POST|PUT|PATCH /admin/tags/ /admin/tags/{id}/`
 - `GET|POST|PUT|PATCH|DELETE /admin/rances/ /admin/rances/{id}/`
 - `GET|POST|PUT|PATCH|DELETE /admin/features/ /admin/features/{id}/`

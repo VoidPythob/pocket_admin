@@ -112,8 +112,49 @@ export function checkSession() {
   return request.get('/admin/tags/')
 }
 
-export function fetchResource(endpoint) {
-  return request.get(endpoint)
+export function fetchResource(endpoint, config) {
+  return request.get(endpoint, config)
+}
+
+export async function fetchAllResource(endpoint, params = {}) {
+  const firstResponse = await request.get(endpoint, {
+    params: {
+      ...params,
+      page: 1,
+    },
+  })
+
+  const firstData = firstResponse?.data
+  if (!Array.isArray(firstData?.results)) {
+    return firstResponse
+  }
+
+  const mergedResults = [...firstData.results]
+  let nextPage = 2
+  let nextLink = firstData.next
+
+  while (nextLink) {
+    const response = await request.get(endpoint, {
+      params: {
+        ...params,
+        page: nextPage,
+      },
+    })
+
+    const pageData = response?.data
+    if (!Array.isArray(pageData?.results) || !pageData.results.length) {
+      break
+    }
+
+    mergedResults.push(...pageData.results)
+    nextLink = pageData.next
+    nextPage += 1
+  }
+
+  return {
+    ...firstResponse,
+    data: mergedResults,
+  }
 }
 
 export function createResource(endpoint, payload) {

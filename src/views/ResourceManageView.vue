@@ -2,15 +2,19 @@
 import { computed, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { createResource, fetchResource, removeResource, updateResource } from '@/api'
+import { createResource, fetchAllResource, fetchResource, removeResource, updateResource } from '@/api'
+import PaginatedSelect from '@/components/form/PaginatedSelect.vue'
 import { adminModuleMap, getModuleByRouteKey } from '@/config/adminModules'
 import {
   createModuleForm,
   extractErrorMessage,
   extractListData,
+  extractPagedData,
   hydrateModuleForm,
   normalizeModulePayload,
 } from '@/utils/adminForms'
+
+const PAGE_SIZE = 10
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +23,9 @@ const state = reactive({
   loading: false,
   saving: false,
   filter: '',
+  currentPage: 1,
+  total: 0,
+  serverPagination: false,
   items: [],
   editingId: null,
   form: {},
@@ -46,8 +53,40 @@ const filteredItems = computed(() => {
   )
 })
 
+const pagedItems = computed(() => {
+  const start = (state.currentPage - 1) * PAGE_SIZE
+  return filteredItems.value.slice(start, start + PAGE_SIZE)
+})
+
+const pageCount = computed(() => Math.max(1, Math.ceil(filteredItems.value.length / PAGE_SIZE)))
+const tableItems = computed(() => (state.serverPagination ? filteredItems.value : pagedItems.value))
+const paginationTotal = computed(() =>
+  state.serverPagination && !state.filter.trim() ? state.total : filteredItems.value.length,
+)
+
 const documentGroupOptions = computed(() =>
   state.lookupOptions.gameDocs.filter((item) => item.p_id === null || item.p_id === 0),
+)
+
+watch(
+  filteredItems,
+  () => {
+    if (state.serverPagination) {
+      return
+    }
+
+    if (state.currentPage > pageCount.value) {
+      state.currentPage = pageCount.value
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => state.filter,
+  () => {
+    state.currentPage = 1
+  },
 )
 
 function resetForm() {
@@ -67,8 +106,8 @@ async function ensureLookupOptions(keys) {
 
   const results = await Promise.allSettled(
     pending.map(async (key) => {
-      const response = await fetchResource(adminModuleMap[key].endpoint)
-      state.lookupOptions[key] = extractListData(response)
+      const lookupResponse = await fetchAllResource(adminModuleMap[key].endpoint)
+      state.lookupOptions[key] = extractListData(lookupResponse)
     }),
   )
 
@@ -80,17 +119,27 @@ async function ensureLookupOptions(keys) {
   })
 }
 
-async function loadModule() {
+async function loadModule(page = 1) {
   if (!moduleConfig.value) {
     router.replace('/dashboard')
     return
   }
 
   state.loading = true
+
   try {
     await ensureLookupOptions(moduleConfig.value.lookupDeps || [])
-    const response = await fetchResource(moduleConfig.value.endpoint)
-    state.items = extractListData(response)
+    const response = await fetchResource(moduleConfig.value.endpoint, {
+      params: {
+        page,
+      },
+    })
+    const pagedData = extractPagedData(response)
+    const hasServerPagination = Array.isArray(response?.data?.results)
+    state.serverPagination = hasServerPagination
+    state.currentPage = page
+    state.total = hasServerPagination ? pagedData.count : extractListData(response).length
+    state.items = hasServerPagination ? pagedData.results : extractListData(response)
     state.lookupOptions[moduleConfig.value.key] = state.items
     resetForm()
   } catch (error) {
@@ -107,7 +156,10 @@ function startEdit(row) {
 
 function getFieldOptions(field) {
   if (field.optionsFrom === 'documentGroups') {
-    return documentGroupOptions.value
+    return [
+      { id: field.default ?? 0, name: '顶级文档组' },
+      ...documentGroupOptions.value,
+    ]
   }
 
   if (field.optionsFrom) {
@@ -122,12 +174,12 @@ function getFieldOptionLabel(field, item) {
     return item[field.optionLabelKey]
   }
 
-  return item.name || item.id
+  return item.name || item.introduction || item.id
 }
 
 function formatValue(columnKey, value) {
-  if (!value) {
-    return '—'
+  if (value === null || value === undefined || value === '') {
+    return '-'
   }
 
   if (columnKey.endsWith('_at')) {
@@ -151,7 +203,7 @@ async function submitForm() {
       : await createResource(moduleConfig.value.endpoint, payload)
 
     ElMessage.success(response?.msg || '保存成功。')
-    await loadModule()
+    await loadModule(state.currentPage)
   } catch (error) {
     ElMessage.error(`保存失败：${extractErrorMessage(error)}`)
   } finally {
@@ -167,15 +219,26 @@ async function deleteItem(row) {
   try {
     const response = await removeResource(moduleConfig.value.endpoint, row.id)
     ElMessage.success(response?.msg || '删除成功。')
-    await loadModule()
+    await loadModule(state.currentPage)
   } catch (error) {
     ElMessage.error(`删除失败：${extractErrorMessage(error)}`)
   }
 }
 
+function handlePageChange(page) {
+  if (state.serverPagination) {
+    loadModule(page)
+    return
+  }
+
+  state.currentPage = page
+}
+
 watch(
   () => route.params.moduleKey,
   () => {
+    state.filter = ''
+    state.currentPage = 1
     loadModule()
   },
   { immediate: true },
@@ -193,7 +256,7 @@ watch(
           </div>
 
           <div class="header-actions">
-            <el-input v-model="state.filter" clearable placeholder="本地过滤表格数据" />
+            <el-input v-model="state.filter" clearable placeholder="输入关键字过滤当前列表" />
             <el-button :loading="state.loading" @click="loadModule">刷新列表</el-button>
           </div>
         </div>
@@ -209,19 +272,27 @@ watch(
         class="tip-alert"
       />
 
-      <el-table v-loading="state.loading" :data="filteredItems" border empty-text="当前没有数据">
+      <el-table
+        v-loading="state.loading"
+        :data="tableItems"
+        row-key="id"
+        table-layout="fixed"
+        border
+        empty-text="当前没有数据"
+      >
         <el-table-column
           v-for="column in moduleConfig.tableColumns"
           :key="column.key"
           :prop="column.key"
           :label="column.label"
           min-width="150"
+          show-overflow-tooltip
         >
           <template #default="{ row }">
             <template v-if="column.key === 'color'">
               <div class="color-cell">
                 <span class="color-dot" :style="{ background: row.color || '#cbd5e1' }"></span>
-                <span>{{ row.color || '—' }}</span>
+                <span>{{ row.color || '-' }}</span>
               </div>
             </template>
             <span v-else class="cell-text">{{ formatValue(column.key, row[column.key]) }}</span>
@@ -232,13 +303,30 @@ watch(
           <template #default="{ row }">
             <el-space wrap>
               <el-button size="small" @click="startEdit(row)">编辑</el-button>
-              <el-button v-if="moduleConfig.canDelete" size="small" type="danger" plain @click="deleteItem(row)">
+              <el-button
+                v-if="moduleConfig.canDelete"
+                size="small"
+                type="danger"
+                plain
+                @click="deleteItem(row)"
+              >
                 删除
               </el-button>
             </el-space>
           </template>
         </el-table-column>
       </el-table>
+
+      <div v-if="paginationTotal > PAGE_SIZE" class="pagination-wrap">
+        <el-pagination
+          background
+          layout="total, prev, pager, next, jumper"
+          :total="paginationTotal"
+          :page-size="PAGE_SIZE"
+          :current-page="state.currentPage"
+          @current-change="handlePageChange"
+        />
+      </div>
     </el-card>
 
     <el-card shadow="hover" class="form-card">
@@ -246,7 +334,7 @@ watch(
         <div class="card-header">
           <div>
             <strong>{{ state.editingId ? `编辑 #${state.editingId}` : `新建${moduleConfig.label}` }}</strong>
-            <p>当前页面通过统一配置生成表单与表格。</p>
+            <p>当前页面使用统一表单和分页列表，关联下拉框也支持搜索与分页。</p>
           </div>
         </div>
       </template>
@@ -275,25 +363,14 @@ watch(
 
               <el-color-picker v-else-if="field.type === 'color'" v-model="state.form[field.key]" />
 
-              <el-select
+              <PaginatedSelect
                 v-else-if="field.type === 'select'"
                 v-model="state.form[field.key]"
-                clearable
-                filterable
-                :placeholder="field.optionsFrom === 'documentGroups' ? '顶级文档组' : '请选择'"
-              >
-                <el-option
-                  v-if="field.default !== undefined"
-                  :label="field.optionsFrom === 'documentGroups' ? '顶级文档组' : '默认值'"
-                  :value="field.default"
-                />
-                <el-option
-                  v-for="option in getFieldOptions(field)"
-                  :key="option.id"
-                  :label="`#${option.id} ${getFieldOptionLabel(field, option)}`"
-                  :value="option.id"
-                />
-              </el-select>
+                :options="getFieldOptions(field)"
+                :placeholder="field.optionsFrom === 'documentGroups' ? '请选择顶级文档组' : '请选择关联项'"
+                :option-label-fn="(option) => `#${option.id} ${getFieldOptionLabel(field, option)}`"
+                :search-keys="[field.optionLabelKey || 'name', 'introduction', 'title', 'id']"
+              />
 
               <el-input
                 v-else-if="field.type === 'textarea'"
@@ -335,7 +412,7 @@ watch(
   display: flex;
   justify-content: space-between;
   gap: 18px;
-  align-items: start;
+  align-items: flex-start;
 }
 
 .card-header strong {
@@ -381,6 +458,12 @@ watch(
   word-break: break-word;
 }
 
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 @media (max-width: 1180px) {
   .resource-page {
     grid-template-columns: 1fr;
@@ -388,7 +471,8 @@ watch(
 }
 
 @media (max-width: 860px) {
-  .header-actions {
+  .header-actions,
+  .pagination-wrap {
     min-width: 0;
     width: 100%;
     flex-direction: column;

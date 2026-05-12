@@ -3,14 +3,18 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
   addPetRelation,
+  fetchAllResource,
   fetchPetRelations,
-  fetchResource,
   removePetRelation,
   replacePetRelation,
   searchPets,
 } from '@/api'
+import PaginatedSelect from '@/components/form/PaginatedSelect.vue'
 import { relationModules } from '@/config/adminModules'
-import { extractErrorMessage, extractListData } from '@/utils/adminForms'
+import { extractErrorMessage, extractListData, extractPagedData } from '@/utils/adminForms'
+
+const PET_PAGE_SIZE = 10
+const RELATION_PAGE_SIZE = 8
 
 const loading = ref(false)
 const lookupLoading = ref(false)
@@ -25,6 +29,17 @@ const lookups = reactive({
 const searchForm = reactive({
   generation_id: '',
   name: '',
+})
+
+const petPagination = reactive({
+  page: 1,
+  total: 0,
+  pageSize: PET_PAGE_SIZE,
+})
+
+const relationState = reactive({
+  filter: '',
+  page: 1,
 })
 
 const pets = ref([])
@@ -50,13 +65,35 @@ const currentOptions = computed(() => {
   return lookups[currentModule.value.optionsKey] || []
 })
 
+const filteredRelations = computed(() => {
+  const keyword = relationState.filter.trim().toLowerCase()
+  if (!keyword || !currentModule.value) {
+    return currentRelations.value
+  }
+
+  return currentRelations.value.filter((item) =>
+    String(item[currentModule.value.itemNameKey] ?? '')
+      .toLowerCase()
+      .includes(keyword),
+  )
+})
+
+const pagedRelations = computed(() => {
+  const start = (relationState.page - 1) * RELATION_PAGE_SIZE
+  return filteredRelations.value.slice(start, start + RELATION_PAGE_SIZE)
+})
+
+function buildOptionLabel(item) {
+  return `#${item.id} ${item.name || item.introduction || item.title || ''}`.trim()
+}
+
 async function loadLookups() {
   lookupLoading.value = true
   try {
     const [generations, rances, eggGroups] = await Promise.all([
-      fetchResource('/admin/generations/'),
-      fetchResource('/admin/rances/'),
-      fetchResource('/admin/egg-groups/'),
+      fetchAllResource('/admin/generations/'),
+      fetchAllResource('/admin/rances/'),
+      fetchAllResource('/admin/egg-groups/'),
     ])
 
     lookups.generations = extractListData(generations)
@@ -69,7 +106,7 @@ async function loadLookups() {
   }
 }
 
-async function submitSearch() {
+async function submitSearch(page = 1) {
   if (!searchForm.generation_id) {
     ElMessage.warning('请先选择世代。')
     return
@@ -80,13 +117,18 @@ async function submitSearch() {
     const response = await searchPets({
       generation_id: Number(searchForm.generation_id),
       name: searchForm.name.trim() || undefined,
+      page,
     })
 
-    pets.value = extractListData(response)
+    const { count, results } = extractPagedData(response)
+    pets.value = results
+    petPagination.page = page
+    petPagination.total = count
+
     if (!pets.value.length) {
       selectedPetId.value = ''
       currentRelations.value = []
-      ElMessage.warning('当前筛选下没有找到宠物。')
+      ElMessage.warning('当前筛选条件下没有找到宠物。')
       return
     }
 
@@ -110,6 +152,7 @@ async function loadRelations() {
   try {
     const response = await fetchPetRelations(selectedPet.value.id, currentModule.value.endpointSegment)
     currentRelations.value = response?.data?.[currentModule.value.collectionKey] || []
+    relationState.page = 1
   } catch (error) {
     ElMessage.error(`关系加载失败：${extractErrorMessage(error)}`)
   } finally {
@@ -142,6 +185,7 @@ async function updateRelation(item) {
 
   const currentId = item[currentModule.value.itemIdKey]
   const newId = replacementTargets[currentId]
+
   if (!newId) {
     ElMessage.warning('请选择替换后的目标关系。')
     return
@@ -181,8 +225,16 @@ async function deleteRelation(item) {
   }
 }
 
+watch(
+  () => relationState.filter,
+  () => {
+    relationState.page = 1
+  },
+)
+
 watch(selectedPetId, () => {
   addTargetId.value = ''
+  relationState.filter = ''
   Object.keys(replacementTargets).forEach((key) => {
     delete replacementTargets[key]
   })
@@ -191,6 +243,7 @@ watch(selectedPetId, () => {
 
 watch(currentRelationType, () => {
   addTargetId.value = ''
+  relationState.filter = ''
   Object.keys(replacementTargets).forEach((key) => {
     delete replacementTargets[key]
   })
@@ -207,7 +260,7 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>宠物筛选</strong>
-            <p>按世代和中文名搜索宠物，然后维护绑定关系。</p>
+            <p>先筛选宠物，再维护种族、蛋组和世代关系。宠物列表和下拉都已分页。</p>
           </div>
           <el-button :loading="lookupLoading" @click="loadLookups">刷新选项</el-button>
         </div>
@@ -216,32 +269,53 @@ onMounted(loadLookups)
       <el-row :gutter="18">
         <el-col :xs="24" :md="8">
           <el-form-item label="世代">
-            <el-select v-model="searchForm.generation_id" placeholder="请选择世代" clearable filterable>
-              <el-option v-for="item in lookups.generations" :key="item.id" :label="item.name" :value="item.id" />
-            </el-select>
+            <PaginatedSelect
+              v-model="searchForm.generation_id"
+              :options="lookups.generations"
+              placeholder="请选择世代"
+              :option-label-fn="buildOptionLabel"
+            />
           </el-form-item>
         </el-col>
         <el-col :xs="24" :md="10">
           <el-form-item label="宠物中文名">
-            <el-input v-model="searchForm.name" placeholder="支持模糊搜索" />
+            <el-input v-model="searchForm.name" placeholder="支持模糊搜索" @keyup.enter="submitSearch(1)" />
           </el-form-item>
         </el-col>
         <el-col :xs="24" :md="6" class="search-action">
-          <el-button type="primary" :loading="petLoading" @click="submitSearch">查询宠物</el-button>
+          <el-button type="primary" :loading="petLoading" @click="submitSearch(1)">查询宠物</el-button>
         </el-col>
       </el-row>
 
-      <div class="pet-list" v-loading="petLoading">
-        <el-tag
-          v-for="item in pets"
-          :key="item.id"
-          :type="String(item.id) === String(selectedPetId) ? 'primary' : 'info'"
-          effect="light"
-          class="pet-tag"
-          @click="selectedPetId = String(item.id)"
-        >
-          #{{ item.id }} {{ item.name }}
-        </el-tag>
+      <el-table
+        v-loading="petLoading"
+        :data="pets"
+        row-key="id"
+        border
+        highlight-current-row
+        empty-text="暂无符合条件的宠物"
+        @current-change="(row) => (selectedPetId = row ? String(row.id) : '')"
+      >
+        <el-table-column prop="id" label="ID" width="90" />
+        <el-table-column prop="name" label="中文名" min-width="160" />
+        <el-table-column prop="jp_name" label="日文名" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="en_name" label="英文名" min-width="160" show-overflow-tooltip />
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button size="small" @click="selectedPetId = String(row.id)">选择</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="petPagination.total > petPagination.pageSize" class="pagination-wrap">
+        <el-pagination
+          background
+          layout="total, prev, pager, next, jumper"
+          :total="petPagination.total"
+          :page-size="petPagination.pageSize"
+          :current-page="petPagination.page"
+          @current-change="submitSearch"
+        />
       </div>
     </el-card>
 
@@ -250,7 +324,7 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>{{ selectedPet ? `${selectedPet.name} 的关系管理` : '请先选择宠物' }}</strong>
-            <p>支持新增、替换、解除种族 / 蛋组 / 世代关系。</p>
+            <p>关系列表支持过滤和分页，新增与替换用分页下拉面板完成。</p>
           </div>
         </div>
       </template>
@@ -262,30 +336,37 @@ onMounted(loadLookups)
       </el-radio-group>
 
       <div class="relation-toolbar">
-        <el-select v-model="addTargetId" placeholder="请选择要新增的关系" clearable filterable>
-          <el-option v-for="item in currentOptions" :key="item.id" :label="`#${item.id} ${item.name}`" :value="item.id" />
-        </el-select>
+        <PaginatedSelect
+          v-model="addTargetId"
+          :options="currentOptions"
+          placeholder="请选择要新增的关系"
+          :option-label-fn="buildOptionLabel"
+        />
         <el-button type="primary" @click="addRelation">新增关系</el-button>
       </div>
 
-      <el-table v-loading="loading" :data="currentRelations" empty-text="暂无关系数据" border>
+      <el-input
+        v-model="relationState.filter"
+        clearable
+        placeholder="过滤当前关系列表"
+        class="relation-filter"
+      />
+
+      <el-table v-loading="loading" :data="pagedRelations" row-key="pet_id" empty-text="暂无关系数据" border>
         <el-table-column prop="pet_name" label="宠物" min-width="160" />
-        <el-table-column :prop="currentModule?.itemNameKey" :label="currentModule?.label || '关系项'" min-width="220" />
-        <el-table-column label="替换目标" min-width="280">
+        <el-table-column
+          :prop="currentModule?.itemNameKey"
+          :label="currentModule?.label || '关系项'"
+          min-width="220"
+        />
+        <el-table-column label="替换目标" min-width="320">
           <template #default="{ row }">
-            <el-select
+            <PaginatedSelect
               v-model="replacementTargets[row[currentModule.itemIdKey]]"
+              :options="currentOptions"
               placeholder="选择替换目标"
-              clearable
-              filterable
-            >
-              <el-option
-                v-for="item in currentOptions"
-                :key="item.id"
-                :label="`#${item.id} ${item.name}`"
-                :value="item.id"
-              />
-            </el-select>
+              :option-label-fn="buildOptionLabel"
+            />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="210" fixed="right">
@@ -297,6 +378,17 @@ onMounted(loadLookups)
           </template>
         </el-table-column>
       </el-table>
+
+      <div v-if="filteredRelations.length > RELATION_PAGE_SIZE" class="pagination-wrap">
+        <el-pagination
+          background
+          layout="total, prev, pager, next, jumper"
+          :total="filteredRelations.length"
+          :page-size="RELATION_PAGE_SIZE"
+          :current-page="relationState.page"
+          @current-change="relationState.page = $event"
+        />
+      </div>
     </el-card>
   </div>
 </template>
@@ -317,7 +409,7 @@ onMounted(loadLookups)
   display: flex;
   justify-content: space-between;
   gap: 18px;
-  align-items: start;
+  align-items: flex-start;
 }
 
 .card-header strong {
@@ -332,18 +424,7 @@ onMounted(loadLookups)
 
 .search-action {
   display: flex;
-  align-items: end;
-}
-
-.pet-list {
-  min-height: 42px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.pet-tag {
-  cursor: pointer;
+  align-items: flex-end;
 }
 
 .relation-switch {
@@ -351,22 +432,27 @@ onMounted(loadLookups)
 }
 
 .relation-toolbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   margin-bottom: 18px;
 }
 
-.relation-toolbar .el-select {
-  width: 320px;
+.relation-filter {
+  margin-bottom: 18px;
+}
+
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
 }
 
 @media (max-width: 860px) {
-  .relation-toolbar {
+  .relation-toolbar,
+  .pagination-wrap {
+    grid-template-columns: 1fr;
     flex-direction: column;
-  }
-
-  .relation-toolbar .el-select {
-    width: 100%;
   }
 }
 </style>

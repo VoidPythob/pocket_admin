@@ -86,6 +86,29 @@ export function extractListData(payload) {
   return []
 }
 
+export function extractPagedData(payload) {
+  const data = payload?.data
+
+  if (Array.isArray(data)) {
+    return {
+      count: data.length,
+      results: data,
+    }
+  }
+
+  if (Array.isArray(data?.results)) {
+    return {
+      count: Number(data.count) || data.results.length,
+      results: data.results,
+    }
+  }
+
+  return {
+    count: 0,
+    results: [],
+  }
+}
+
 export function extractErrorMessage(error) {
   return error?.payload?.msg || error?.message || '未知错误'
 }

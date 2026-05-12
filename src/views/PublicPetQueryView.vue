@@ -3,15 +3,18 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   deletePet,
+  fetchAllResource,
   fetchPetDetail,
-  fetchResource,
   getApiBaseUrl,
   importPetCsv,
   searchPets,
   updatePet,
   uploadAdminFile,
 } from '@/api'
+import PaginatedSelect from '@/components/form/PaginatedSelect.vue'
 import { extractErrorMessage, extractListData } from '@/utils/adminForms'
+
+const DEFAULT_PAGE_SIZE = 10
 
 const lookupLoading = ref(false)
 const searchLoading = ref(false)
@@ -42,6 +45,12 @@ const csvImportForm = reactive({
   overwriteExisting: true,
 })
 
+const pagination = reactive({
+  page: 1,
+  pageSize: DEFAULT_PAGE_SIZE,
+  total: 0,
+})
+
 const pets = ref([])
 const dialogVisible = ref(false)
 
@@ -63,13 +72,29 @@ const featureOptions = computed(() => lookups.features)
 const ranceOptions = computed(() => lookups.rances)
 const skillOptions = computed(() => lookups.skills)
 const imageUploading = computed(() => uploadCount.value > 0)
+
+const tableRows = computed(() =>
+  pets.value.map((row) => ({
+    ...row,
+    imageUrl: buildPreviewUrl(row.first_image_url),
+    displayNames: [row.jp_name, row.en_name].filter(Boolean).join(' / ') || '-',
+    featureNames: normalizeRelationNames(row.features),
+    tagNames: normalizeRelationNames(row.tags),
+  })),
+)
+
 const resultCountText = computed(() => {
   if (!searched.value) {
-    return '先选择世代和条件查询宠物，再在表格里进行编辑、删除和导入后的校验。'
+    return '先选择世代和条件查询宠物，再在表格中进行编辑和删除。'
   }
 
-  return `当前共查询到 ${pets.value.length} 只宠物。`
+  if (!pagination.total) {
+    return '当前条件下没有查询到宠物。'
+  }
+
+  return `共 ${pagination.total} 条，当前第 ${pagination.page} 页，每页 ${pagination.pageSize} 条。`
 })
+
 const csvResultItems = computed(() => {
   const data = csvImportResult.value
   if (!data) {
@@ -95,6 +120,14 @@ const csvResultItems = computed(() => {
     { label: '关联标签', value: data.linked_tags ?? 0 },
   ]
 })
+
+function normalizeRelationNames(list) {
+  if (!Array.isArray(list) || !list.length) {
+    return []
+  }
+
+  return list.map((item) => item.name || item.introduction || item.title).filter(Boolean)
+}
 
 function buildPreviewUrl(path) {
   if (!path) {
@@ -123,7 +156,6 @@ function buildSubmitUrl(path) {
   }
 
   const baseUrl = getApiBaseUrl().replace(/\/+$/, '')
-
   if (typeof window === 'undefined') {
     return path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`
   }
@@ -138,30 +170,26 @@ function buildSubmitUrl(path) {
     : `${window.location.origin}${normalizedBase}/${path}`
 }
 
-function formatNames(row) {
-  return [row.jp_name, row.en_name].filter(Boolean).join(' / ') || '-'
-}
-
-function formatFeatureList(row) {
-  if (!Array.isArray(row.features) || !row.features.length) {
-    return []
+function extractPagePayload(payload) {
+  const data = payload?.data
+  if (Array.isArray(data)) {
+    return {
+      results: data,
+      count: data.length,
+    }
   }
 
-  return row.features
-    .map((item) => item.name || item.introduction || item.title)
-    .filter(Boolean)
-}
-
-function formatTagList(row) {
-  if (!Array.isArray(row.tags) || !row.tags.length) {
-    return []
+  if (data && Array.isArray(data.results)) {
+    return {
+      results: data.results,
+      count: Number(data.count) || data.results.length,
+    }
   }
 
-  return row.tags.map((item) => item.name || item.title).filter(Boolean)
-}
-
-function getTableImageUrl(row) {
-  return buildPreviewUrl(row.first_image_url)
+  return {
+    results: [],
+    count: 0,
+  }
 }
 
 function resetEditForm() {
@@ -177,15 +205,26 @@ function resetEditForm() {
   uploadRef.value?.clearFiles?.()
 }
 
+function buildImageState(images) {
+  return (images || []).map((item, index) => ({
+    uid: `image-${index}`,
+    file_id: '',
+    file_name: `image-${index + 1}`,
+    rawUrl: item,
+    previewUrl: buildPreviewUrl(item),
+    submitUrl: buildSubmitUrl(item),
+  }))
+}
+
 async function loadLookups() {
   lookupLoading.value = true
 
   try {
     const [generations, features, rances, skills] = await Promise.all([
-      fetchResource('/admin/generations/'),
-      fetchResource('/admin/features/'),
-      fetchResource('/admin/rances/'),
-      fetchResource('/admin/skills/'),
+      fetchAllResource('/admin/generations/'),
+      fetchAllResource('/admin/features/'),
+      fetchAllResource('/admin/rances/'),
+      fetchAllResource('/admin/skills/'),
     ])
 
     lookups.generations = extractListData(generations)
@@ -203,7 +242,7 @@ async function loadLookups() {
   }
 }
 
-async function submitSearch() {
+async function loadPets(page = 1) {
   if (!filterForm.generation_id) {
     ElMessage.warning('请先选择世代。')
     return
@@ -216,12 +255,24 @@ async function submitSearch() {
       generation_id: Number(filterForm.generation_id),
       feature_id: filterForm.feature_id ? Number(filterForm.feature_id) : undefined,
       name: filterForm.name.trim() || undefined,
+      page,
     })
 
-    pets.value = extractListData(response)
+    const { results, count } = extractPagePayload(response)
+    pets.value = results
+    pagination.page = page
+    pagination.total = count
     searched.value = true
 
-    if (!pets.value.length) {
+    if (!results.length && page > 1 && count > 0) {
+      const fallbackPage = Math.max(1, Math.ceil(count / pagination.pageSize))
+      if (fallbackPage !== page) {
+        await loadPets(fallbackPage)
+      }
+      return
+    }
+
+    if (!results.length && !count) {
       ElMessage.info('当前条件下没有查询到宠物。')
     }
   } catch (error) {
@@ -231,9 +282,23 @@ async function submitSearch() {
   }
 }
 
+function handleSearch() {
+  pagination.page = 1
+  loadPets(1)
+}
+
+function handlePageChange(page) {
+  if (page === pagination.page) {
+    return
+  }
+
+  loadPets(page)
+}
+
 function resetFilters() {
   filterForm.feature_id = ''
   filterForm.name = ''
+  pagination.page = 1
 
   if (!filterForm.generation_id && lookups.generations.length) {
     filterForm.generation_id = String(lookups.generations[0].id)
@@ -273,7 +338,7 @@ async function runCsvImport(mode) {
     await loadLookups()
 
     if (searched.value) {
-      await submitSearch()
+      await loadPets(pagination.page)
     }
   } catch (error) {
     ElMessage.error(`CSV 导入失败：${extractErrorMessage(error)}`)
@@ -325,17 +390,6 @@ function moveImage(index, offset) {
   const current = editImages.value[index]
   editImages.value.splice(index, 1)
   editImages.value.splice(targetIndex, 0, current)
-}
-
-function buildImageState(images) {
-  return (images || []).map((item, index) => ({
-    uid: `image-${index}`,
-    file_id: '',
-    file_name: `image-${index + 1}`,
-    rawUrl: item,
-    previewUrl: buildPreviewUrl(item),
-    submitUrl: buildSubmitUrl(item),
-  }))
 }
 
 async function openEditDialog(row) {
@@ -400,7 +454,7 @@ async function savePet() {
 
     ElMessage.success(response?.msg || '宠物修改成功。')
     dialogVisible.value = false
-    await submitSearch()
+    await loadPets(pagination.page)
   } catch (error) {
     ElMessage.error(`宠物修改失败：${extractErrorMessage(error)}`)
   } finally {
@@ -427,7 +481,9 @@ async function removePet(row) {
       dialogVisible.value = false
     }
 
-    await submitSearch()
+    const targetPage =
+      pets.value.length === 1 && pagination.page > 1 ? pagination.page - 1 : pagination.page
+    await loadPets(targetPage)
   } catch (error) {
     ElMessage.error(`宠物删除失败：${extractErrorMessage(error)}`)
   }
@@ -493,12 +549,7 @@ onMounted(loadLookups)
         </el-col>
 
         <el-col :xs="24" :lg="9">
-          <el-alert
-            title="导入说明"
-            type="info"
-            :closable="false"
-            show-icon
-          >
+          <el-alert title="导入说明" type="info" :closable="false" show-icon>
             <p>开启“覆盖”时，已存在的宠物会按英文名更新。</p>
             <p>关闭“覆盖”时，已存在宠物会被跳过并计入统计。</p>
             <p>导入成功后会自动刷新筛选项，并刷新当前宠物列表。</p>
@@ -506,12 +557,7 @@ onMounted(loadLookups)
         </el-col>
       </el-row>
 
-      <el-descriptions
-        v-if="csvResultItems.length"
-        class="import-result"
-        :column="3"
-        border
-      >
+      <el-descriptions v-if="csvResultItems.length" class="import-result" :column="3" border>
         <el-descriptions-item
           v-for="item in csvResultItems"
           :key="item.label"
@@ -527,7 +573,7 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>宠物管理</strong>
-            <p>按世代、特性和名称筛选宠物，并在表格中进行编辑和删除。</p>
+            <p>按世代、特性和名称筛选宠物，查询结果按页加载，减少单次渲染压力。</p>
           </div>
           <el-button :loading="lookupLoading" @click="loadLookups">刷新筛选项</el-button>
         </div>
@@ -537,37 +583,24 @@ onMounted(loadLookups)
         <el-row :gutter="18">
           <el-col :xs="24" :md="8">
             <el-form-item label="世代">
-              <el-select
+              <PaginatedSelect
                 v-model="filterForm.generation_id"
+                :options="generationOptions"
                 placeholder="请选择世代"
-                clearable
-                filterable
-              >
-                <el-option
-                  v-for="item in generationOptions"
-                  :key="item.id"
-                  :label="item.name"
-                  :value="String(item.id)"
-                />
-              </el-select>
+                :option-label-fn="(item) => item.name"
+              />
             </el-form-item>
           </el-col>
 
           <el-col :xs="24" :md="8">
             <el-form-item label="特性">
-              <el-select
+              <PaginatedSelect
                 v-model="filterForm.feature_id"
+                :options="featureOptions"
                 placeholder="可选，按特性筛选"
-                clearable
-                filterable
-              >
-                <el-option
-                  v-for="item in featureOptions"
-                  :key="item.id"
-                  :label="item.name || item.introduction || `特性 #${item.id}`"
-                  :value="String(item.id)"
-                />
-              </el-select>
+                :option-label-fn="(item) => item.name || item.introduction || `特性 #${item.id}`"
+                :search-keys="['name', 'introduction', 'id']"
+              />
             </el-form-item>
           </el-col>
 
@@ -577,14 +610,14 @@ onMounted(loadLookups)
                 v-model="filterForm.name"
                 placeholder="可选，支持名称模糊搜索"
                 clearable
-                @keyup.enter="submitSearch"
+                @keyup.enter="handleSearch"
               />
             </el-form-item>
           </el-col>
         </el-row>
 
         <div class="form-actions">
-          <el-button type="primary" :loading="searchLoading" @click="submitSearch">查询宠物</el-button>
+          <el-button type="primary" :loading="searchLoading" @click="handleSearch">查询宠物</el-button>
           <el-button @click="resetFilters">重置筛选</el-button>
         </div>
       </el-form>
@@ -602,16 +635,18 @@ onMounted(loadLookups)
 
       <el-table
         v-loading="searchLoading"
-        :data="pets"
+        :data="tableRows"
+        row-key="id"
+        table-layout="fixed"
         border
         empty-text="暂无符合条件的宠物"
       >
         <el-table-column label="封面" width="108" align="center">
           <template #default="{ row }">
             <el-image
-              v-if="row.first_image_url"
-              :src="getTableImageUrl(row)"
-              :preview-src-list="[getTableImageUrl(row)]"
+              v-if="row.imageUrl"
+              :src="row.imageUrl"
+              :preview-src-list="[row.imageUrl]"
               fit="cover"
               class="table-cover"
               preview-teleported
@@ -622,28 +657,24 @@ onMounted(loadLookups)
 
         <el-table-column prop="id" label="ID" width="88" />
         <el-table-column prop="name" label="中文名" min-width="150" />
-        <el-table-column label="别名" min-width="220">
-          <template #default="{ row }">
-            <span class="cell-text">{{ formatNames(row) }}</span>
-          </template>
-        </el-table-column>
+        <el-table-column prop="displayNames" label="别名" min-width="220" show-overflow-tooltip />
         <el-table-column label="特性" min-width="240">
           <template #default="{ row }">
             <div class="tag-row">
-              <el-tag v-for="feature in formatFeatureList(row)" :key="feature" effect="light">
+              <el-tag v-for="feature in row.featureNames" :key="feature" effect="light">
                 {{ feature }}
               </el-tag>
-              <span v-if="!formatFeatureList(row).length" class="empty-text">-</span>
+              <span v-if="!row.featureNames.length" class="empty-text">-</span>
             </div>
           </template>
         </el-table-column>
         <el-table-column label="标签" min-width="220">
           <template #default="{ row }">
             <div class="tag-row">
-              <el-tag v-for="tag in formatTagList(row)" :key="tag" type="success" effect="plain">
+              <el-tag v-for="tag in row.tagNames" :key="tag" type="success" effect="plain">
                 {{ tag }}
               </el-tag>
-              <span v-if="!formatTagList(row).length" class="empty-text">-</span>
+              <span v-if="!row.tagNames.length" class="empty-text">-</span>
             </div>
           </template>
         </el-table-column>
@@ -656,6 +687,17 @@ onMounted(loadLookups)
           </template>
         </el-table-column>
       </el-table>
+
+      <div v-if="searched && pagination.total > pagination.pageSize" class="pagination-wrap">
+        <el-pagination
+          background
+          layout="total, prev, pager, next, jumper"
+          :total="pagination.total"
+          :page-size="pagination.pageSize"
+          :current-page="pagination.page"
+          @current-change="handlePageChange"
+        />
+      </div>
     </el-card>
 
     <el-dialog
@@ -688,74 +730,51 @@ onMounted(loadLookups)
           <el-row :gutter="18">
             <el-col :xs="24" :md="12">
               <el-form-item label="世代">
-                <el-select
+                <PaginatedSelect
                   v-model="editForm.generation_id"
-                  filterable
-                  clearable
+                  :options="generationOptions"
                   placeholder="请选择世代"
-                >
-                  <el-option
-                    v-for="item in generationOptions"
-                    :key="item.id"
-                    :label="`#${item.id} ${item.name}`"
-                    :value="String(item.id)"
-                  />
-                </el-select>
+                  :option-label-fn="(item) => `#${item.id} ${item.name}`"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :md="12">
               <el-form-item label="种族">
-                <el-select
+                <PaginatedSelect
                   v-model="editForm.rance_id"
-                  filterable
-                  clearable
+                  :options="ranceOptions"
                   placeholder="请选择种族"
-                >
-                  <el-option
-                    v-for="item in ranceOptions"
-                    :key="item.id"
-                    :label="`#${item.id} ${item.name}`"
-                    :value="String(item.id)"
-                  />
-                </el-select>
+                  :option-label-fn="(item) => `#${item.id} ${item.name}`"
+                  :search-keys="['name', 'p_id', 'id']"
+                />
               </el-form-item>
             </el-col>
           </el-row>
 
           <el-form-item label="特性">
-            <el-select
+            <PaginatedSelect
               v-model="editForm.feature_ids"
               multiple
-              filterable
               collapse-tags
               collapse-tags-tooltip
+              :options="featureOptions"
               placeholder="选择特性"
-            >
-              <el-option
-                v-for="item in featureOptions"
-                :key="item.id"
-                :label="`#${item.id} ${item.introduction || item.name || ''}`"
-                :value="item.id"
-              />
-            </el-select>
+              :option-label-fn="(item) => `#${item.id} ${item.introduction || item.name || ''}`"
+              :search-keys="['introduction', 'name', 'id']"
+            />
           </el-form-item>
 
           <el-form-item label="技能">
-            <el-select
+            <PaginatedSelect
               v-model="editForm.skill_ids"
               multiple
-              filterable
               collapse-tags
               collapse-tags-tooltip
+              :options="skillOptions"
               placeholder="选择技能"
-            >
-              <el-option
-                v-for="item in skillOptions"
-                :key="item.id"
-                :label="`#${item.id} ${item.name}`"
-                :value="item.id"
-              />
-            </el-select>
+              :option-label-fn="(item) => `#${item.id} ${item.name}`"
+              :search-keys="['name', 'introduction', 'id']"
+            />
           </el-form-item>
 
           <el-form-item label="图片面板">
@@ -868,6 +887,12 @@ onMounted(loadLookups)
   margin-top: 20px;
 }
 
+.pagination-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 .import-card :deep(.el-alert__description p) {
   margin: 0 0 8px;
 }
@@ -889,8 +914,7 @@ onMounted(loadLookups)
   gap: 8px;
 }
 
-.empty-text,
-.cell-text {
+.empty-text {
   color: #7b6a59;
 }
 
@@ -971,7 +995,9 @@ onMounted(loadLookups)
 
 @media (max-width: 768px) {
   .form-actions,
-  .upload-status-row {
+  .upload-status-row,
+  .pagination-wrap {
+    justify-content: stretch;
     flex-direction: column;
     align-items: stretch;
   }

@@ -400,6 +400,10 @@
 - `PATCH /admin/rances/{id}/`
 - `DELETE /admin/rances/{id}/`
 
+说明：
+
+- 列表接口 `GET /admin/rances/` 支持 `page`、`page_size` 分页参数
+
 字段：
 
 - `p_id`
@@ -444,6 +448,10 @@
 - `PATCH /admin/generations/{id}/`
 - `DELETE /admin/generations/{id}/`
 
+说明：
+
+- 列表接口 `GET /admin/generations/` 支持 `page`、`page_size` 分页参数
+
 字段：
 
 - `name`
@@ -460,6 +468,10 @@
 - `PUT /admin/skills/{id}/`
 - `PATCH /admin/skills/{id}/`
 - `DELETE /admin/skills/{id}/`
+
+说明：
+
+- 列表接口 `GET /admin/skills/` 支持 `page`、`page_size` 分页参数
 
 字段：
 
@@ -541,6 +553,10 @@
 - `PUT /admin/egg-groups/{id}/`
 - `PATCH /admin/egg-groups/{id}/`
 - `DELETE /admin/egg-groups/{id}/`
+
+说明：
+
+- 列表接口 `GET /admin/egg-groups/` 支持 `page`、`page_size` 分页参数
 
 字段：
 

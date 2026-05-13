@@ -163,10 +163,10 @@ async function submit() {
     return
   }
 
-  if (!uploadedImages.value.length) {
-    ElMessage.warning('请先上传至少一张宠物图片。')
-    return
-  }
+  // if (!uploadedImages.value.length) {
+  //   ElMessage.warning('请先上传至少一张宠物图片。')
+  //   return
+  // }
 
   loading.value = true
   try {
@@ -226,35 +226,18 @@ onMounted(loadLookups)
         </el-row>
 
         <el-form-item label="世代">
-          <PaginatedSelect
-            v-model="form.generation_id"
-            :options="lookups.generations"
-            placeholder="请选择世代"
-            :option-label-fn="buildOptionLabel"
-          />
+          <PaginatedSelect v-model="form.generation_id" :options="lookups.generations" placeholder="请选择世代"
+            :option-label-fn="buildOptionLabel" />
         </el-form-item>
 
         <el-form-item label="种族">
-          <PaginatedSelect
-            v-model="form.rance_id"
-            :options="lookups.rances"
-            placeholder="请选择种族"
-            :option-label-fn="buildOptionLabel"
-            :search-keys="['name', 'p_id', 'id']"
-          />
+          <PaginatedSelect v-model="form.rance_id" :options="lookups.rances" placeholder="请选择种族"
+            :option-label-fn="buildOptionLabel" :search-keys="['name', 'p_id', 'id']" />
         </el-form-item>
 
         <el-form-item label="图片面板">
-          <el-upload
-            ref="uploadRef"
-            drag
-            multiple
-            action="#"
-            accept="image/*"
-            :auto-upload="true"
-            :show-file-list="false"
-            :http-request="handleImageUpload"
-          >
+          <el-upload ref="uploadRef" drag multiple action="#" accept="image/*" :auto-upload="true"
+            :show-file-list="false" :http-request="handleImageUpload">
             <div class="upload-panel-title">拖拽图片到这里，或点击选择文件</div>
             <div class="el-upload__text">选中文件后会自动上传，并把返回地址加入图片列表</div>
           </el-upload>
@@ -281,11 +264,7 @@ onMounted(loadLookups)
 
               <div class="image-actions">
                 <el-button size="small" :disabled="index === 0" @click="moveImage(index, -1)">上移</el-button>
-                <el-button
-                  size="small"
-                  :disabled="index === uploadedImages.length - 1"
-                  @click="moveImage(index, 1)"
-                >
+                <el-button size="small" :disabled="index === uploadedImages.length - 1" @click="moveImage(index, 1)">
                   下移
                 </el-button>
                 <el-button size="small" type="danger" plain @click="removeImage(index)">移除</el-button>
@@ -295,29 +274,15 @@ onMounted(loadLookups)
         </el-form-item>
 
         <el-form-item label="特性">
-          <PaginatedSelect
-            v-model="form.feature_ids"
-            multiple
-            collapse-tags
-            collapse-tags-tooltip
-            :options="lookups.features"
-            placeholder="选择特性"
-            :option-label-fn="buildOptionLabel"
-            :search-keys="['introduction', 'detail', 'id']"
-          />
+          <PaginatedSelect v-model="form.feature_ids" multiple collapse-tags collapse-tags-tooltip
+            :options="lookups.features" placeholder="选择特性" :option-label-fn="buildOptionLabel"
+            :search-keys="['introduction', 'detail', 'id']" />
         </el-form-item>
 
         <el-form-item label="技能">
-          <PaginatedSelect
-            v-model="form.skill_ids"
-            multiple
-            collapse-tags
-            collapse-tags-tooltip
-            :options="lookups.skills"
-            placeholder="选择技能"
-            :option-label-fn="buildOptionLabel"
-            :search-keys="['name', 'introduction', 'id']"
-          />
+          <PaginatedSelect v-model="form.skill_ids" multiple collapse-tags collapse-tags-tooltip
+            :options="lookups.skills" placeholder="选择技能" :option-label-fn="buildOptionLabel"
+            :search-keys="['name', 'introduction', 'id']" />
         </el-form-item>
 
         <el-space wrap>

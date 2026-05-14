@@ -17,7 +17,7 @@ const PET_PAGE_SIZE = 10
 const RELATION_PAGE_SIZE = 8
 
 const loading = ref(false)
-const lookupLoading = ref(false)
+const lookupPendingCount = ref(0)
 const petLoading = ref(false)
 
 const lookups = reactive({
@@ -25,6 +25,14 @@ const lookups = reactive({
   rances: [],
   eggGroups: [],
 })
+
+const lookupEndpointMap = {
+  generations: '/admin/generations/',
+  rances: '/admin/rances/',
+  eggGroups: '/admin/egg-groups/',
+}
+
+const lookupRequests = new Map()
 
 const searchForm = reactive({
   generation_id: '',
@@ -65,6 +73,8 @@ const currentOptions = computed(() => {
   return lookups[currentModule.value.optionsKey] || []
 })
 
+const lookupLoading = computed(() => lookupPendingCount.value > 0)
+
 const filteredRelations = computed(() => {
   const keyword = relationState.filter.trim().toLowerCase()
   if (!keyword || !currentModule.value) {
@@ -87,23 +97,58 @@ function buildOptionLabel(item) {
   return `#${item.id} ${item.name || item.introduction || item.title || ''}`.trim()
 }
 
-async function loadLookups() {
-  lookupLoading.value = true
-  try {
-    const [generations, rances, eggGroups] = await Promise.all([
-      fetchAllResource('/admin/generations/'),
-      fetchAllResource('/admin/rances/'),
-      fetchAllResource('/admin/egg-groups/'),
-    ])
+async function ensureLookup(key, force = false) {
+  if (!force && lookups[key]?.length) {
+    return lookups[key]
+  }
 
-    lookups.generations = extractListData(generations)
-    lookups.rances = extractListData(rances)
-    lookups.eggGroups = extractListData(eggGroups)
+  if (lookupRequests.has(key)) {
+    return lookupRequests.get(key)
+  }
+
+  lookupPendingCount.value += 1
+
+  const requestTask = (async () => {
+    const response = await fetchAllResource(lookupEndpointMap[key])
+    const items = extractListData(response)
+    lookups[key] = items
+
+    if (key === 'generations' && !searchForm.generation_id && items.length) {
+      searchForm.generation_id = String(items[0].id)
+    }
+
+    return items
+  })()
+
+  lookupRequests.set(key, requestTask)
+
+  try {
+    return await requestTask
   } catch (error) {
     ElMessage.error(`关联选项加载失败：${extractErrorMessage(error)}`)
+    throw error
   } finally {
-    lookupLoading.value = false
+    lookupRequests.delete(key)
+    lookupPendingCount.value = Math.max(0, lookupPendingCount.value - 1)
   }
+}
+
+async function refreshLookups() {
+  try {
+    await Promise.all(
+      Object.keys(lookupEndpointMap).map((key) => ensureLookup(key, true)),
+    )
+  } catch {
+    // message handled in ensureLookup
+  }
+}
+
+function handleRelationOptionVisibleChange(visible) {
+  if (!visible || !currentModule.value?.optionsKey) {
+    return
+  }
+
+  ensureLookup(currentModule.value.optionsKey)
 }
 
 async function submitSearch(page = 1) {
@@ -218,7 +263,7 @@ async function deleteRelation(item) {
       currentModule.value.endpointSegment,
       item[currentModule.value.itemIdKey],
     )
-    ElMessage.success(response?.msg || '关系已解除。')
+    ElMessage.success(response?.msg || '关系解除成功。')
     await loadRelations()
   } catch (error) {
     ElMessage.error(`关系解除失败：${extractErrorMessage(error)}`)
@@ -250,7 +295,9 @@ watch(currentRelationType, () => {
   loadRelations()
 })
 
-onMounted(loadLookups)
+onMounted(() => {
+  ensureLookup('generations')
+})
 </script>
 
 <template>
@@ -260,9 +307,9 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>宠物筛选</strong>
-            <p>先筛选宠物，再维护种族、蛋组和世代关系。宠物列表和下拉都已分页。</p>
+            <p>首屏只加载世代，宠物查询和关系下拉都按需请求。</p>
           </div>
-          <el-button :loading="lookupLoading" @click="loadLookups">刷新选项</el-button>
+          <el-button :loading="lookupLoading" @click="refreshLookups">刷新选项</el-button>
         </div>
       </template>
 
@@ -274,6 +321,7 @@ onMounted(loadLookups)
               :options="lookups.generations"
               placeholder="请选择世代"
               :option-label-fn="buildOptionLabel"
+              @visible-change="(visible) => visible && ensureLookup('generations')"
             />
           </el-form-item>
         </el-col>
@@ -324,7 +372,7 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>{{ selectedPet ? `${selectedPet.name} 的关系管理` : '请先选择宠物' }}</strong>
-            <p>关系列表支持过滤和分页，新增与替换用分页下拉面板完成。</p>
+            <p>关系列表支持过滤和分页，新增与替换都使用分页下拉面板。</p>
           </div>
         </div>
       </template>
@@ -341,6 +389,7 @@ onMounted(loadLookups)
           :options="currentOptions"
           placeholder="请选择要新增的关系"
           :option-label-fn="buildOptionLabel"
+          @visible-change="handleRelationOptionVisibleChange"
         />
         <el-button type="primary" @click="addRelation">新增关系</el-button>
       </div>
@@ -366,6 +415,7 @@ onMounted(loadLookups)
               :options="currentOptions"
               placeholder="选择替换目标"
               :option-label-fn="buildOptionLabel"
+              @visible-change="handleRelationOptionVisibleChange"
             />
           </template>
         </el-table-column>

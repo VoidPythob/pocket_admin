@@ -16,7 +16,7 @@ import { extractErrorMessage, extractListData } from '@/utils/adminForms'
 
 const DEFAULT_PAGE_SIZE = 10
 
-const lookupLoading = ref(false)
+const lookupPendingCount = ref(0)
 const searchLoading = ref(false)
 const dialogLoading = ref(false)
 const saving = ref(false)
@@ -34,6 +34,15 @@ const lookups = reactive({
   rances: [],
   skills: [],
 })
+
+const lookupEndpointMap = {
+  generations: '/admin/generations/',
+  features: '/admin/features/',
+  rances: '/admin/rances/',
+  skills: '/admin/skills/',
+}
+
+const lookupRequests = new Map()
 
 const filterForm = reactive({
   generation_id: '',
@@ -72,6 +81,7 @@ const featureOptions = computed(() => lookups.features)
 const ranceOptions = computed(() => lookups.rances)
 const skillOptions = computed(() => lookups.skills)
 const imageUploading = computed(() => uploadCount.value > 0)
+const lookupLoading = computed(() => lookupPendingCount.value > 0)
 
 const tableRows = computed(() =>
   pets.value.map((row) => ({
@@ -85,7 +95,7 @@ const tableRows = computed(() =>
 
 const resultCountText = computed(() => {
   if (!searched.value) {
-    return '先选择世代和条件查询宠物，再在表格中进行编辑和删除。'
+    return '先选择世代和筛选条件，再查询宠物。'
   }
 
   if (!pagination.total) {
@@ -139,11 +149,7 @@ function buildPreviewUrl(path) {
   }
 
   const baseUrl = getApiBaseUrl().replace(/\/+$/, '')
-  if (path.startsWith('/')) {
-    return `${baseUrl}${path}`
-  }
-
-  return `${baseUrl}/${path}`
+  return path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`
 }
 
 function buildSubmitUrl(path) {
@@ -156,6 +162,7 @@ function buildSubmitUrl(path) {
   }
 
   const baseUrl = getApiBaseUrl().replace(/\/+$/, '')
+
   if (typeof window === 'undefined') {
     return path.startsWith('/') ? `${baseUrl}${path}` : `${baseUrl}/${path}`
   }
@@ -172,6 +179,7 @@ function buildSubmitUrl(path) {
 
 function extractPagePayload(payload) {
   const data = payload?.data
+
   if (Array.isArray(data)) {
     return {
       results: data,
@@ -216,29 +224,49 @@ function buildImageState(images) {
   }))
 }
 
-async function loadLookups() {
-  lookupLoading.value = true
+async function ensureLookup(key, force = false) {
+  if (!force && lookups[key]?.length) {
+    return lookups[key]
+  }
+
+  if (lookupRequests.has(key)) {
+    return lookupRequests.get(key)
+  }
+
+  lookupPendingCount.value += 1
+
+  const requestTask = (async () => {
+    const response = await fetchAllResource(lookupEndpointMap[key])
+    const items = extractListData(response)
+    lookups[key] = items
+
+    if (key === 'generations' && !filterForm.generation_id && items.length) {
+      filterForm.generation_id = String(items[0].id)
+    }
+
+    return items
+  })()
+
+  lookupRequests.set(key, requestTask)
 
   try {
-    const [generations, features, rances, skills] = await Promise.all([
-      fetchAllResource('/admin/generations/'),
-      fetchAllResource('/admin/features/'),
-      fetchAllResource('/admin/rances/'),
-      fetchAllResource('/admin/skills/'),
-    ])
-
-    lookups.generations = extractListData(generations)
-    lookups.features = extractListData(features)
-    lookups.rances = extractListData(rances)
-    lookups.skills = extractListData(skills)
-
-    if (!filterForm.generation_id && lookups.generations.length) {
-      filterForm.generation_id = String(lookups.generations[0].id)
-    }
+    return await requestTask
   } catch (error) {
     ElMessage.error(`筛选项加载失败：${extractErrorMessage(error)}`)
+    throw error
   } finally {
-    lookupLoading.value = false
+    lookupRequests.delete(key)
+    lookupPendingCount.value = Math.max(0, lookupPendingCount.value - 1)
+  }
+}
+
+async function refreshLookups() {
+  try {
+    await Promise.all(
+      Object.keys(lookupEndpointMap).map((key) => ensureLookup(key, true)),
+    )
+  } catch {
+    // message handled in ensureLookup
   }
 }
 
@@ -335,7 +363,7 @@ async function runCsvImport(mode) {
       selectedCsvFile.value = null
     }
 
-    await loadLookups()
+    await refreshLookups()
 
     if (searched.value) {
       await loadPets(pagination.page)
@@ -355,7 +383,7 @@ async function handleImageUpload(option) {
     const payload = response?.data
 
     if (!payload?.url) {
-      throw new Error('上传成功但没有返回图片地址。')
+      throw new Error('上传成功，但返回数据里没有图片地址。')
     }
 
     editImages.value.push({
@@ -398,7 +426,13 @@ async function openEditDialog(row) {
   resetEditForm()
 
   try {
-    const detailResponse = await fetchPetDetail(row.id)
+    const [detailResponse] = await Promise.all([
+      fetchPetDetail(row.id),
+      ensureLookup('rances'),
+      ensureLookup('features'),
+      ensureLookup('skills'),
+    ])
+
     const detail = detailResponse?.data || {}
 
     editForm.id = row.id
@@ -432,11 +466,6 @@ async function savePet() {
     ElMessage.warning('请先选择种族。')
     return
   }
-
-  // if (!editImages.value.length) {
-  //   ElMessage.warning('请至少保留一张宠物图片。')
-  //   return
-  // }
 
   saving.value = true
 
@@ -489,7 +518,9 @@ async function removePet(row) {
   }
 }
 
-onMounted(loadLookups)
+onMounted(() => {
+  ensureLookup('generations')
+})
 </script>
 
 <template>
@@ -499,7 +530,7 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>CSV 导入</strong>
-            <p>支持上传自定义 CSV，或直接触发服务端内置 pokemon.csv 导入。</p>
+            <p>支持上传自定义 CSV，或直接触发后端内置的 `pokemon.csv` 导入。</p>
           </div>
         </div>
       </template>
@@ -508,21 +539,33 @@ onMounted(loadLookups)
         <el-col :xs="24" :lg="15">
           <el-form label-position="top">
             <el-form-item label="选择 CSV 文件">
-              <el-upload ref="csvUploadRef" action="#" :auto-upload="false" :limit="1" accept=".csv,text/csv"
-                :on-change="handleCsvFileChange" :on-remove="handleCsvFileRemove">
+              <el-upload
+                ref="csvUploadRef"
+                action="#"
+                :auto-upload="false"
+                :limit="1"
+                accept=".csv,text/csv"
+                :on-change="handleCsvFileChange"
+                :on-remove="handleCsvFileRemove"
+              >
                 <template #trigger>
                   <el-button>选择 CSV 文件</el-button>
                 </template>
                 <template #tip>
                   <div class="upload-tip">
-                    只支持 `.csv` 文件。不选择文件时，可直接使用右侧按钮导入后端内置数据。
+                    只支持 `.csv` 文件。不选择文件时，可以直接使用右侧按钮导入后端内置数据。
                   </div>
                 </template>
               </el-upload>
             </el-form-item>
 
             <el-form-item label="导入策略">
-              <el-switch v-model="csvImportForm.overwriteExisting" inline-prompt active-text="覆盖" inactive-text="跳过" />
+              <el-switch
+                v-model="csvImportForm.overwriteExisting"
+                inline-prompt
+                active-text="覆盖"
+                inactive-text="跳过"
+              />
             </el-form-item>
 
             <div class="form-actions">
@@ -540,7 +583,7 @@ onMounted(loadLookups)
           <el-alert title="导入说明" type="info" :closable="false" show-icon>
             <p>开启“覆盖”时，已存在的宠物会按英文名更新。</p>
             <p>关闭“覆盖”时，已存在宠物会被跳过并计入统计。</p>
-            <p>导入成功后会自动刷新筛选项，并刷新当前宠物列表。</p>
+            <p>导入成功后会刷新筛选项，并在已查询时刷新当前宠物列表。</p>
           </el-alert>
         </el-col>
       </el-row>
@@ -557,9 +600,9 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>宠物管理</strong>
-            <p>按世代、特性和名称筛选宠物，查询结果按页加载，减少单次渲染压力。</p>
+            <p>首屏只加载一次世代数据，其它下拉在第一次展开时再请求。</p>
           </div>
-          <el-button :loading="lookupLoading" @click="loadLookups">刷新筛选项</el-button>
+          <el-button :loading="lookupLoading" @click="refreshLookups">刷新筛选项</el-button>
         </div>
       </template>
 
@@ -567,28 +610,45 @@ onMounted(loadLookups)
         <el-row :gutter="18">
           <el-col :xs="24" :md="8">
             <el-form-item label="世代">
-              <PaginatedSelect v-model="filterForm.generation_id" :options="generationOptions" placeholder="请选择世代"
-                :option-label-fn="(item) => item.name" />
+              <PaginatedSelect
+                v-model="filterForm.generation_id"
+                :options="generationOptions"
+                placeholder="请选择世代"
+                :option-label-fn="(item) => item.name"
+                @visible-change="(visible) => visible && ensureLookup('generations')"
+              />
             </el-form-item>
           </el-col>
 
           <el-col :xs="24" :md="8">
             <el-form-item label="特性">
-              <PaginatedSelect v-model="filterForm.feature_id" :options="featureOptions" placeholder="可选，按特性筛选"
+              <PaginatedSelect
+                v-model="filterForm.feature_id"
+                :options="featureOptions"
+                placeholder="可选，按特性筛选"
                 :option-label-fn="(item) => item.name || item.introduction || `特性 #${item.id}`"
-                :search-keys="['name', 'introduction', 'id']" />
+                :search-keys="['name', 'introduction', 'id']"
+                @visible-change="(visible) => visible && ensureLookup('features')"
+              />
             </el-form-item>
           </el-col>
 
           <el-col :xs="24" :md="8">
             <el-form-item label="宠物名称">
-              <el-input v-model="filterForm.name" placeholder="可选，支持名称模糊搜索" clearable @keyup.enter="handleSearch" />
+              <el-input
+                v-model="filterForm.name"
+                placeholder="可选，支持名称模糊搜索"
+                clearable
+                @keyup.enter="handleSearch"
+              />
             </el-form-item>
           </el-col>
         </el-row>
 
         <div class="form-actions">
-          <el-button type="primary" :loading="searchLoading" @click="handleSearch">查询宠物</el-button>
+          <el-button type="primary" :loading="searchLoading" @click="handleSearch">
+            查询宠物
+          </el-button>
           <el-button @click="resetFilters">重置筛选</el-button>
         </div>
       </el-form>
@@ -604,12 +664,24 @@ onMounted(loadLookups)
         </div>
       </template>
 
-      <el-table v-loading="searchLoading" :data="tableRows" row-key="id" table-layout="fixed" border
-        empty-text="暂无符合条件的宠物">
+      <el-table
+        v-loading="searchLoading"
+        :data="tableRows"
+        row-key="id"
+        table-layout="fixed"
+        border
+        empty-text="暂无符合条件的宠物"
+      >
         <el-table-column label="封面" width="108" align="center">
           <template #default="{ row }">
-            <el-image v-if="row.imageUrl" :src="row.imageUrl" :preview-src-list="[row.imageUrl]" fit="cover"
-              class="table-cover" preview-teleported />
+            <el-image
+              v-if="row.imageUrl"
+              :src="row.imageUrl"
+              :preview-src-list="[row.imageUrl]"
+              fit="cover"
+              class="table-cover"
+              preview-teleported
+            />
             <span v-else class="empty-text">无图</span>
           </template>
         </el-table-column>
@@ -648,12 +720,24 @@ onMounted(loadLookups)
       </el-table>
 
       <div v-if="searched && pagination.total > pagination.pageSize" class="pagination-wrap">
-        <el-pagination background layout="total, prev, pager, next, jumper" :total="pagination.total"
-          :page-size="pagination.pageSize" :current-page="pagination.page" @current-change="handlePageChange" />
+        <el-pagination
+          background
+          layout="total, prev, pager, next, jumper"
+          :total="pagination.total"
+          :page-size="pagination.pageSize"
+          :current-page="pagination.page"
+          @current-change="handlePageChange"
+        />
       </div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" title="编辑宠物" width="960px" destroy-on-close :close-on-click-modal="false">
+    <el-dialog
+      v-model="dialogVisible"
+      title="编辑宠物"
+      width="960px"
+      destroy-on-close
+      :close-on-click-modal="false"
+    >
       <div v-loading="dialogLoading">
         <el-form label-position="top">
           <el-row :gutter="18">
@@ -677,34 +761,68 @@ onMounted(loadLookups)
           <el-row :gutter="18">
             <el-col :xs="24" :md="12">
               <el-form-item label="世代">
-                <PaginatedSelect v-model="editForm.generation_id" :options="generationOptions" placeholder="请选择世代"
-                  :option-label-fn="(item) => `#${item.id} ${item.name}`" />
+                <PaginatedSelect
+                  v-model="editForm.generation_id"
+                  :options="generationOptions"
+                  placeholder="请选择世代"
+                  :option-label-fn="(item) => `#${item.id} ${item.name}`"
+                  @visible-change="(visible) => visible && ensureLookup('generations')"
+                />
               </el-form-item>
             </el-col>
             <el-col :xs="24" :md="12">
               <el-form-item label="种族">
-                <PaginatedSelect v-model="editForm.rance_id" :options="ranceOptions" placeholder="请选择种族"
-                  :option-label-fn="(item) => `#${item.id} ${item.name}`" :search-keys="['name', 'p_id', 'id']" />
+                <PaginatedSelect
+                  v-model="editForm.rance_id"
+                  :options="ranceOptions"
+                  placeholder="请选择种族"
+                  :option-label-fn="(item) => `#${item.id} ${item.name}`"
+                  :search-keys="['name', 'p_id', 'id']"
+                  @visible-change="(visible) => visible && ensureLookup('rances')"
+                />
               </el-form-item>
             </el-col>
           </el-row>
 
           <el-form-item label="特性">
-            <PaginatedSelect v-model="editForm.feature_ids" multiple collapse-tags collapse-tags-tooltip
-              :options="featureOptions" placeholder="选择特性"
+            <PaginatedSelect
+              v-model="editForm.feature_ids"
+              multiple
+              collapse-tags
+              collapse-tags-tooltip
+              :options="featureOptions"
+              placeholder="选择特性"
               :option-label-fn="(item) => `#${item.id} ${item.introduction || item.name || ''}`"
-              :search-keys="['introduction', 'name', 'id']" />
+              :search-keys="['introduction', 'name', 'id']"
+              @visible-change="(visible) => visible && ensureLookup('features')"
+            />
           </el-form-item>
 
           <el-form-item label="技能">
-            <PaginatedSelect v-model="editForm.skill_ids" multiple collapse-tags collapse-tags-tooltip
-              :options="skillOptions" placeholder="选择技能" :option-label-fn="(item) => `#${item.id} ${item.name}`"
-              :search-keys="['name', 'introduction', 'id']" />
+            <PaginatedSelect
+              v-model="editForm.skill_ids"
+              multiple
+              collapse-tags
+              collapse-tags-tooltip
+              :options="skillOptions"
+              placeholder="选择技能"
+              :option-label-fn="(item) => `#${item.id} ${item.name}`"
+              :search-keys="['name', 'introduction', 'id']"
+              @visible-change="(visible) => visible && ensureLookup('skills')"
+            />
           </el-form-item>
 
           <el-form-item label="图片面板">
-            <el-upload ref="uploadRef" drag multiple action="#" accept="image/*" :auto-upload="true"
-              :show-file-list="false" :http-request="handleImageUpload">
+            <el-upload
+              ref="uploadRef"
+              drag
+              multiple
+              action="#"
+              accept="image/*"
+              :auto-upload="true"
+              :show-file-list="false"
+              :http-request="handleImageUpload"
+            >
               <div class="upload-panel-title">拖拽图片到这里，或点击选择文件</div>
               <div class="el-upload__text">选中文件后会自动上传，并加入当前宠物图片队列</div>
             </el-upload>
@@ -732,7 +850,11 @@ onMounted(loadLookups)
                   <el-button size="small" :disabled="index === 0" @click="moveImage(index, -1)">
                     上移
                   </el-button>
-                  <el-button size="small" :disabled="index === editImages.length - 1" @click="moveImage(index, 1)">
+                  <el-button
+                    size="small"
+                    :disabled="index === editImages.length - 1"
+                    @click="moveImage(index, 1)"
+                  >
                     下移
                   </el-button>
                   <el-button size="small" type="danger" plain @click="removeImage(index)">
@@ -907,7 +1029,6 @@ onMounted(loadLookups)
 }
 
 @media (max-width: 768px) {
-
   .form-actions,
   .upload-status-row,
   .pagination-wrap {

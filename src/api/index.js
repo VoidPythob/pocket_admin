@@ -130,26 +130,32 @@ export async function fetchAllResource(endpoint, params = {}) {
   }
 
   const mergedResults = [...firstData.results]
-  let nextPage = 2
-  let nextLink = firstData.next
+  const totalPages = Number(firstData.total_pages) || 1
 
-  while (nextLink) {
-    const response = await request.get(endpoint, {
+  if (totalPages <= 1) {
+    return {
+      ...firstResponse,
+      data: mergedResults,
+    }
+  }
+
+  const pageRequests = Array.from({ length: totalPages - 1 }, (_, index) =>
+    request.get(endpoint, {
       params: {
         ...params,
-        page: nextPage,
+        page: index + 2,
       },
-    })
+    }),
+  )
 
+  const restResponses = await Promise.all(pageRequests)
+
+  restResponses.forEach((response) => {
     const pageData = response?.data
-    if (!Array.isArray(pageData?.results) || !pageData.results.length) {
-      break
+    if (Array.isArray(pageData?.results) && pageData.results.length) {
+      mergedResults.push(...pageData.results)
     }
-
-    mergedResults.push(...pageData.results)
-    nextLink = pageData.next
-    nextPage += 1
-  }
+  })
 
   return {
     ...firstResponse,

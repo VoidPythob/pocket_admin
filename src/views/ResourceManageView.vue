@@ -32,6 +32,8 @@ const state = reactive({
   lookupOptions: Object.fromEntries(Object.keys(adminModuleMap).map((key) => [key, []])),
 })
 
+const lookupRequests = new Map()
+
 const moduleConfig = computed(() => getModuleByRouteKey(route.params.moduleKey))
 
 const filteredItems = computed(() => {
@@ -98,16 +100,46 @@ function resetForm() {
   state.form = createModuleForm(moduleConfig.value)
 }
 
-async function ensureLookupOptions(keys) {
-  const pending = [...new Set(keys)].filter((key) => adminModuleMap[key])
+function getModuleLookupKeys(module = moduleConfig.value) {
+  if (!module) {
+    return []
+  }
+
+  return [...new Set([
+    ...(module.lookupDeps || []),
+    ...module.fields
+      .map((field) => (field.optionsFrom === 'documentGroups' ? 'gameDocs' : field.optionsFrom))
+      .filter(Boolean),
+  ])]
+}
+
+async function ensureLookupOptions(keys, force = false) {
+  const pending = [...new Set(keys)]
+    .filter((key) => adminModuleMap[key])
+    .filter((key) => force || !(state.lookupOptions[key] || []).length)
   if (!pending.length) {
     return
   }
 
   const results = await Promise.allSettled(
     pending.map(async (key) => {
-      const lookupResponse = await fetchAllResource(adminModuleMap[key].endpoint)
-      state.lookupOptions[key] = extractListData(lookupResponse)
+      if (lookupRequests.has(key)) {
+        await lookupRequests.get(key)
+        return
+      }
+
+      const requestTask = (async () => {
+        const lookupResponse = await fetchAllResource(adminModuleMap[key].endpoint)
+        state.lookupOptions[key] = extractListData(lookupResponse)
+      })()
+
+      lookupRequests.set(key, requestTask)
+
+      try {
+        await requestTask
+      } finally {
+        lookupRequests.delete(key)
+      }
     }),
   )
 
@@ -128,7 +160,6 @@ async function loadModule(page = 1) {
   state.loading = true
 
   try {
-    await ensureLookupOptions(moduleConfig.value.lookupDeps || [])
     const response = await fetchResource(moduleConfig.value.endpoint, {
       params: {
         page,
@@ -149,9 +180,25 @@ async function loadModule(page = 1) {
   }
 }
 
-function startEdit(row) {
+async function startEdit(row) {
   state.editingId = row.id
   state.form = hydrateModuleForm(moduleConfig.value, row)
+  await ensureLookupOptions(getModuleLookupKeys())
+}
+
+function handleFieldVisibleChange(field, visible) {
+  if (!visible) {
+    return
+  }
+
+  if (field.optionsFrom === 'documentGroups') {
+    ensureLookupOptions(['gameDocs'])
+    return
+  }
+
+  if (field.optionsFrom) {
+    ensureLookupOptions([field.optionsFrom])
+  }
 }
 
 function getFieldOptions(field) {
@@ -370,6 +417,7 @@ watch(
                 :placeholder="field.optionsFrom === 'documentGroups' ? '请选择顶级文档组' : '请选择关联项'"
                 :option-label-fn="(option) => `#${option.id} ${getFieldOptionLabel(field, option)}`"
                 :search-keys="[field.optionLabelKey || 'name', 'introduction', 'title', 'id']"
+                @visible-change="(visible) => handleFieldVisibleChange(field, visible)"
               />
 
               <el-input

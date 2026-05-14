@@ -56,7 +56,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['update:modelValue', 'change'])
+const emit = defineEmits(['update:modelValue', 'change', 'visible-change'])
 
 const currentPage = ref(1)
 const keyword = ref('')
@@ -154,6 +154,8 @@ function handleKeywordChange(value) {
 }
 
 function handleVisibleChange(visible) {
+  emit('visible-change', visible)
+
   if (!visible) {
     keyword.value = ''
     currentPage.value = 1

@@ -11,10 +11,10 @@ const uploadRef = ref(null)
 const imageUploadCount = ref(0)
 
 const lookups = reactive({
+  generations: [],
   rances: [],
   features: [],
   skills: [],
-  generations: [],
 })
 
 const form = reactive({
@@ -30,25 +30,47 @@ const form = reactive({
 const uploadedImages = ref([])
 const imageUploading = computed(() => imageUploadCount.value > 0)
 
+const lookupEndpointMap = {
+  generations: '/admin/generations/',
+  rances: '/admin/rances/',
+  features: '/admin/features/',
+  skills: '/admin/skills/',
+}
+
 function buildOptionLabel(item) {
   return `#${item.id} ${item.name || item.introduction || item.title || ''}`.trim()
 }
 
-async function loadLookups() {
-  lookupLoading.value = true
+async function ensureLookup(key, force = false) {
+  if (!force && lookups[key]?.length) {
+    return
+  }
 
+  lookupLoading.value = true
   try {
-    const [rances, features, skills, generations] = await Promise.all([
-      fetchAllResource('/admin/rances/'),
-      fetchAllResource('/admin/features/'),
-      fetchAllResource('/admin/skills/'),
-      fetchAllResource('/admin/generations/'),
+    const response = await fetchAllResource(lookupEndpointMap[key])
+    lookups[key] = extractListData(response)
+  } catch (error) {
+    ElMessage.error(`选项加载失败：${extractErrorMessage(error)}`)
+  } finally {
+    lookupLoading.value = false
+  }
+}
+
+async function refreshLookups() {
+  lookupLoading.value = true
+  try {
+    const [generations, rances, features, skills] = await Promise.all([
+      fetchAllResource(lookupEndpointMap.generations),
+      fetchAllResource(lookupEndpointMap.rances),
+      fetchAllResource(lookupEndpointMap.features),
+      fetchAllResource(lookupEndpointMap.skills),
     ])
 
+    lookups.generations = extractListData(generations)
     lookups.rances = extractListData(rances)
     lookups.features = extractListData(features)
     lookups.skills = extractListData(skills)
-    lookups.generations = extractListData(generations)
   } catch (error) {
     ElMessage.error(`选项加载失败：${extractErrorMessage(error)}`)
   } finally {
@@ -163,11 +185,6 @@ async function submit() {
     return
   }
 
-  // if (!uploadedImages.value.length) {
-  //   ElMessage.warning('请先上传至少一张宠物图片。')
-  //   return
-  // }
-
   loading.value = true
   try {
     const response = await createPet({
@@ -190,7 +207,9 @@ async function submit() {
   }
 }
 
-onMounted(loadLookups)
+onMounted(() => {
+  ensureLookup('generations')
+})
 </script>
 
 <template>
@@ -200,9 +219,9 @@ onMounted(loadLookups)
         <div class="card-header">
           <div>
             <strong>创建宠物</strong>
-            <p>创建表单中的下拉框都已改为可搜索、可分页的选择面板。</p>
+            <p>页面首次进入只加载一次世代数据，其他下拉在第一次展开时再请求。</p>
           </div>
-          <el-button :loading="lookupLoading" @click="loadLookups">刷新选项</el-button>
+          <el-button :loading="lookupLoading" @click="refreshLookups">刷新选项</el-button>
         </div>
       </template>
 
@@ -226,18 +245,37 @@ onMounted(loadLookups)
         </el-row>
 
         <el-form-item label="世代">
-          <PaginatedSelect v-model="form.generation_id" :options="lookups.generations" placeholder="请选择世代"
-            :option-label-fn="buildOptionLabel" />
+          <PaginatedSelect
+            v-model="form.generation_id"
+            :options="lookups.generations"
+            placeholder="请选择世代"
+            :option-label-fn="buildOptionLabel"
+            @visible-change="(visible) => visible && ensureLookup('generations')"
+          />
         </el-form-item>
 
         <el-form-item label="种族">
-          <PaginatedSelect v-model="form.rance_id" :options="lookups.rances" placeholder="请选择种族"
-            :option-label-fn="buildOptionLabel" :search-keys="['name', 'p_id', 'id']" />
+          <PaginatedSelect
+            v-model="form.rance_id"
+            :options="lookups.rances"
+            placeholder="请选择种族"
+            :option-label-fn="buildOptionLabel"
+            :search-keys="['name', 'p_id', 'id']"
+            @visible-change="(visible) => visible && ensureLookup('rances')"
+          />
         </el-form-item>
 
         <el-form-item label="图片面板">
-          <el-upload ref="uploadRef" drag multiple action="#" accept="image/*" :auto-upload="true"
-            :show-file-list="false" :http-request="handleImageUpload">
+          <el-upload
+            ref="uploadRef"
+            drag
+            multiple
+            action="#"
+            accept="image/*"
+            :auto-upload="true"
+            :show-file-list="false"
+            :http-request="handleImageUpload"
+          >
             <div class="upload-panel-title">拖拽图片到这里，或点击选择文件</div>
             <div class="el-upload__text">选中文件后会自动上传，并把返回地址加入图片列表</div>
           </el-upload>
@@ -264,7 +302,11 @@ onMounted(loadLookups)
 
               <div class="image-actions">
                 <el-button size="small" :disabled="index === 0" @click="moveImage(index, -1)">上移</el-button>
-                <el-button size="small" :disabled="index === uploadedImages.length - 1" @click="moveImage(index, 1)">
+                <el-button
+                  size="small"
+                  :disabled="index === uploadedImages.length - 1"
+                  @click="moveImage(index, 1)"
+                >
                   下移
                 </el-button>
                 <el-button size="small" type="danger" plain @click="removeImage(index)">移除</el-button>
@@ -274,15 +316,31 @@ onMounted(loadLookups)
         </el-form-item>
 
         <el-form-item label="特性">
-          <PaginatedSelect v-model="form.feature_ids" multiple collapse-tags collapse-tags-tooltip
-            :options="lookups.features" placeholder="选择特性" :option-label-fn="buildOptionLabel"
-            :search-keys="['introduction', 'detail', 'id']" />
+          <PaginatedSelect
+            v-model="form.feature_ids"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            :options="lookups.features"
+            placeholder="选择特性"
+            :option-label-fn="buildOptionLabel"
+            :search-keys="['introduction', 'detail', 'id']"
+            @visible-change="(visible) => visible && ensureLookup('features')"
+          />
         </el-form-item>
 
         <el-form-item label="技能">
-          <PaginatedSelect v-model="form.skill_ids" multiple collapse-tags collapse-tags-tooltip
-            :options="lookups.skills" placeholder="选择技能" :option-label-fn="buildOptionLabel"
-            :search-keys="['name', 'introduction', 'id']" />
+          <PaginatedSelect
+            v-model="form.skill_ids"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            :options="lookups.skills"
+            placeholder="选择技能"
+            :option-label-fn="buildOptionLabel"
+            :search-keys="['name', 'introduction', 'id']"
+            @visible-change="(visible) => visible && ensureLookup('skills')"
+          />
         </el-form-item>
 
         <el-space wrap>
@@ -300,7 +358,7 @@ onMounted(loadLookups)
         <el-timeline-item timestamp="1">创建宠物时必须传入 `generation_id`。</el-timeline-item>
         <el-timeline-item timestamp="2">图片会在选择后自动上传，不需要手动填写 URL。</el-timeline-item>
         <el-timeline-item timestamp="3">图片顺序可调整，第一张会作为封面图。</el-timeline-item>
-        <el-timeline-item timestamp="4">所有下拉都支持关键字过滤和分页浏览。</el-timeline-item>
+        <el-timeline-item timestamp="4">其他大选项集会在第一次展开时懒加载。</el-timeline-item>
       </el-timeline>
     </el-card>
   </div>

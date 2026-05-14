@@ -65,7 +65,7 @@ export const adminModules = [
     label: '标签',
     endpoint: '/admin/tags/',
     description: '维护宠物标签名称与颜色。',
-    canDelete: false,
+    canDelete: true,
     tableColumns: [
       { key: 'id', label: 'ID' },
       { key: 'name', label: '名称' },
@@ -76,7 +76,7 @@ export const adminModules = [
       { key: 'name', label: '标签名', type: 'text', required: true },
       { key: 'color', label: '颜色', type: 'color', default: '#f97316' },
     ],
-    tips: ['标签接口支持新增、PUT 和 PATCH，当前不支持删除。'],
+    tips: ['标签已支持删除；如果标签已经绑定宠物，后端会拒绝删除。'],
   },
   {
     key: 'rances',

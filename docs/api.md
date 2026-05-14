@@ -295,6 +295,28 @@
 - 该接口返回文件流，不使用 `Result` JSON 包装
 - 文件不存在时返回 `404`
 
+### 4.21 标签列表
+
+- 方法：`GET`
+- 路径：`/tags/`
+- 权限：公开查询
+
+请求参数：
+
+- `page`：页码，可选
+- `page_size`：每页条数，可选，最大 `100`
+
+说明：
+
+- 分页返回包含：`count`、`total_pages`、`next`、`previous`、`results`
+- 列表项返回：`id`、`name`、`color`
+
+### 4.22 标签详情
+
+- 方法：`GET`
+- 路径：`/tags/{id}/`
+- 权限：公开查询
+
 ## 5. 管理员宠物相关接口
 
 ### 5.1 创建宠物
@@ -317,7 +339,8 @@
   "feature_ids": [1, 2],
   "generation_id": 1,
   "rance_id": 3,
-  "skill_ids": [10, 11]
+  "skill_ids": [10, 11],
+  "tag_ids": [1, 3]
 }
 ```
 
@@ -334,16 +357,16 @@
 
 说明：
 
-- 支持修改 `icon_urls`、`name`、`jp_name`、`en_name`、`feature_ids`、`generation_id`、`rance_id`、`skill_ids`
+- 支持修改 `icon_urls`、`name`、`jp_name`、`en_name`、`feature_ids`、`generation_id`、`rance_id`、`skill_ids`、`tag_ids`
 - 传入 `icon_urls` 时会整体替换当前宠物图片，第一张仍作为封面
-- 传入 `feature_ids`、`generation_id`、`rance_id`、`skill_ids` 时会替换对应关联
+- 传入 `feature_ids`、`generation_id`、`rance_id`、`skill_ids`、`tag_ids` 时会替换对应关联
 
 说明：
 
-- `icon_urls`、`feature_ids`、`skill_ids` 会自动去重
+- `icon_urls`、`feature_ids`、`skill_ids`、`tag_ids` 会自动去重
 - `generation_id` 为必传
 - 第一个图片会作为封面
-- 会校验特性、种族、技能是否存在
+- 会校验特性、种族、技能、标签是否存在
 
 ### 5.2 宠物种族绑定
 
@@ -389,11 +412,13 @@
 - `POST /admin/tags/`
 - `PUT /admin/tags/{id}/`
 - `PATCH /admin/tags/{id}/`
+- `DELETE /admin/tags/{id}/`
 
 字段：
 
 - `name`
 - `color`
+- 如果标签已经绑定宠物，则不允许删除
 
 ### 6.2 种族
 
@@ -645,6 +670,8 @@
 - `GET /items/{id}/`
 - `GET /generations/`
 - `GET /generations/{id}/`
+- `GET /tags/`
+- `GET /tags/{id}/`
 - `GET /egg-groups/`
 - `GET /egg-groups/{id}/`
 - `GET /egg-groups/{id}/pets/`
@@ -661,7 +688,7 @@
 - `POST /admin/pets/import-csv/`
 - `POST /admin/pets/`
 - `GET|PUT|PATCH|DELETE /admin/pets/{id}/`
-- `GET|POST|PUT|PATCH /admin/tags/ /admin/tags/{id}/`
+- `GET|POST|PUT|PATCH|DELETE /admin/tags/ /admin/tags/{id}/`
 - `GET|POST|PUT|PATCH|DELETE /admin/rances/ /admin/rances/{id}/`
 - `GET|POST|PUT|PATCH|DELETE /admin/features/ /admin/features/{id}/`
 - `GET|POST|PUT|PATCH|DELETE /admin/generations/ /admin/generations/{id}/`

@@ -33,6 +33,7 @@ const lookups = reactive({
   features: [],
   rances: [],
   skills: [],
+  tags: [],
 })
 
 const lookupEndpointMap = {
@@ -40,6 +41,7 @@ const lookupEndpointMap = {
   features: '/admin/features/',
   rances: '/admin/rances/',
   skills: '/admin/skills/',
+  tags: '/admin/tags/',
 }
 
 const lookupRequests = new Map()
@@ -72,6 +74,7 @@ const editForm = reactive({
   rance_id: '',
   feature_ids: [],
   skill_ids: [],
+  tag_ids: [],
 })
 
 const editImages = ref([])
@@ -80,6 +83,7 @@ const generationOptions = computed(() => lookups.generations)
 const featureOptions = computed(() => lookups.features)
 const ranceOptions = computed(() => lookups.rances)
 const skillOptions = computed(() => lookups.skills)
+const tagOptions = computed(() => lookups.tags)
 const imageUploading = computed(() => uploadCount.value > 0)
 const lookupLoading = computed(() => lookupPendingCount.value > 0)
 
@@ -181,10 +185,7 @@ function extractPagePayload(payload) {
   const data = payload?.data
 
   if (Array.isArray(data)) {
-    return {
-      results: data,
-      count: data.length,
-    }
+    return { results: data, count: data.length }
   }
 
   if (data && Array.isArray(data.results)) {
@@ -194,10 +195,7 @@ function extractPagePayload(payload) {
     }
   }
 
-  return {
-    results: [],
-    count: 0,
-  }
+  return { results: [], count: 0 }
 }
 
 function resetEditForm() {
@@ -209,6 +207,7 @@ function resetEditForm() {
   editForm.rance_id = ''
   editForm.feature_ids = []
   editForm.skill_ids = []
+  editForm.tag_ids = []
   editImages.value = []
   uploadRef.value?.clearFiles?.()
 }
@@ -262,11 +261,9 @@ async function ensureLookup(key, force = false) {
 
 async function refreshLookups() {
   try {
-    await Promise.all(
-      Object.keys(lookupEndpointMap).map((key) => ensureLookup(key, true)),
-    )
+    await Promise.all(Object.keys(lookupEndpointMap).map((key) => ensureLookup(key, true)))
   } catch {
-    // message handled in ensureLookup
+    // error handled in ensureLookup
   }
 }
 
@@ -431,6 +428,7 @@ async function openEditDialog(row) {
       ensureLookup('rances'),
       ensureLookup('features'),
       ensureLookup('skills'),
+      ensureLookup('tags'),
     ])
 
     const detail = detailResponse?.data || {}
@@ -443,6 +441,11 @@ async function openEditDialog(row) {
     editForm.rance_id = detail.rance_id ? String(detail.rance_id) : ''
     editForm.feature_ids = Array.isArray(detail.feature_ids) ? detail.feature_ids : []
     editForm.skill_ids = Array.isArray(detail.skill_ids) ? detail.skill_ids : []
+    editForm.tag_ids = Array.isArray(detail.tag_ids)
+      ? detail.tag_ids
+      : Array.isArray(detail.tags)
+        ? detail.tags.map((item) => item.id).filter(Boolean)
+        : []
     editImages.value = buildImageState(detail.icon_urls)
   } catch (error) {
     dialogVisible.value = false
@@ -478,6 +481,7 @@ async function savePet() {
       rance_id: Number(editForm.rance_id),
       feature_ids: editForm.feature_ids.map(Number),
       skill_ids: editForm.skill_ids.map(Number),
+      tag_ids: editForm.tag_ids.map(Number),
       icon_urls: editImages.value.map((item) => item.submitUrl),
     })
 
@@ -809,6 +813,20 @@ onMounted(() => {
               :option-label-fn="(item) => `#${item.id} ${item.name}`"
               :search-keys="['name', 'introduction', 'id']"
               @visible-change="(visible) => visible && ensureLookup('skills')"
+            />
+          </el-form-item>
+
+          <el-form-item label="标签">
+            <PaginatedSelect
+              v-model="editForm.tag_ids"
+              multiple
+              collapse-tags
+              collapse-tags-tooltip
+              :options="tagOptions"
+              placeholder="选择标签"
+              :option-label-fn="(item) => `#${item.id} ${item.name}`"
+              :search-keys="['name', 'id']"
+              @visible-change="(visible) => visible && ensureLookup('tags')"
             />
           </el-form-item>
 

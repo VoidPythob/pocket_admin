@@ -38,7 +38,7 @@ async function applyBaseUrl() {
   authStore.resetSession()
   const ok = await authStore.verifySession(true)
   if (!ok) {
-    router.push('/login-register')
+    router.push('/login')
   }
   ElMessage[ok ? 'success' : 'warning'](
     ok ? '接口地址已更新，并重新验证了当前会话。' : '接口地址已更新，请重新登录。',
@@ -48,7 +48,7 @@ async function applyBaseUrl() {
 async function verifySession() {
   const ok = await authStore.verifySession(true)
   if (!ok) {
-    router.push('/login-register')
+    router.push('/login')
   }
   ElMessage[ok ? 'success' : 'warning'](
     ok ? '管理员会话有效。' : '当前没有可用的管理员登录会话。',
@@ -60,7 +60,7 @@ async function handleLogout() {
   try {
     await authStore.logout()
     await router.replace({
-      name: 'loginRegister',
+      name: 'login',
       query: {
         skipSessionCheck: '1',
       },

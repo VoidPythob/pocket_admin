@@ -2,7 +2,17 @@
 import { computed, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { createResource, fetchAllResource, fetchResource, removeResource, updateResource } from '@/api'
+import {
+  addItemCategoryRelation,
+  createResource,
+  fetchAllResource,
+  fetchItemCategoryRelations,
+  fetchResource,
+  removeItemCategoryRelation,
+  removeResource,
+  replaceItemCategoryRelation,
+  updateResource,
+} from '@/api'
 import PaginatedSelect from '@/components/form/PaginatedSelect.vue'
 import { adminModuleMap, getModuleByRouteKey } from '@/config/adminModules'
 import {
@@ -15,6 +25,7 @@ import {
 } from '@/utils/adminForms'
 
 const PAGE_SIZE = 10
+const ITEM_CATEGORY_PAGE_SIZE = 8
 
 const route = useRoute()
 const router = useRouter()
@@ -30,11 +41,49 @@ const state = reactive({
   editingId: null,
   form: {},
   lookupOptions: Object.fromEntries(Object.keys(adminModuleMap).map((key) => [key, []])),
+  itemCategoryLoading: false,
+  itemCategories: [],
+  itemCategoryFilter: '',
+  itemCategoryPage: 1,
+  itemCategoryTargetId: '',
+  itemCategoryReplacementTargets: {},
 })
 
 const lookupRequests = new Map()
 
 const moduleConfig = computed(() => getModuleByRouteKey(route.params.moduleKey))
+const isItemModule = computed(() => moduleConfig.value?.key === 'items')
+const supportsServerSearch = computed(
+  () => Boolean(state.serverPagination && moduleConfig.value?.listQueryKey),
+)
+
+const documentGroupOptions = computed(() =>
+  state.lookupOptions.gameDocs.filter((item) => item.p_id === null || item.p_id === 0),
+)
+
+const itemCategoryOptions = computed(() => state.lookupOptions.itemCategories || [])
+
+function getEntityLabel(item) {
+  if (!item || typeof item !== 'object') {
+    return item ?? ''
+  }
+
+  return item.name || item.category_name || item.introduction || item.title || item.id || ''
+}
+
+function stringifyFilterValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyFilterValue(item)).join(' ')
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value)
+      .map((item) => stringifyFilterValue(item))
+      .join(' ')
+  }
+
+  return String(value ?? '')
+}
 
 const filteredItems = computed(() => {
   if (!moduleConfig.value) {
@@ -42,13 +91,13 @@ const filteredItems = computed(() => {
   }
 
   const keyword = state.filter.trim().toLowerCase()
-  if (!keyword) {
+  if (!keyword || supportsServerSearch.value) {
     return state.items
   }
 
   return state.items.filter((item) =>
     moduleConfig.value.tableColumns.some((column) =>
-      String(item[column.key] ?? '')
+      stringifyFilterValue(item[column.key])
         .toLowerCase()
         .includes(keyword),
     ),
@@ -61,14 +110,38 @@ const pagedItems = computed(() => {
 })
 
 const pageCount = computed(() => Math.max(1, Math.ceil(filteredItems.value.length / PAGE_SIZE)))
-const tableItems = computed(() => (state.serverPagination ? filteredItems.value : pagedItems.value))
+
+const tableItems = computed(() => {
+  if (state.serverPagination) {
+    return supportsServerSearch.value ? state.items : filteredItems.value
+  }
+
+  return pagedItems.value
+})
+
 const paginationTotal = computed(() =>
-  state.serverPagination && !state.filter.trim() ? state.total : filteredItems.value.length,
+  state.serverPagination ? state.total : filteredItems.value.length,
 )
 
-const documentGroupOptions = computed(() =>
-  state.lookupOptions.gameDocs.filter((item) => item.p_id === null || item.p_id === 0),
+const filteredItemCategoryRelations = computed(() => {
+  const keyword = state.itemCategoryFilter.trim().toLowerCase()
+  if (!keyword) {
+    return state.itemCategories
+  }
+
+  return state.itemCategories.filter((item) =>
+    `${getItemCategoryId(item)} ${getItemCategoryName(item)}`.toLowerCase().includes(keyword),
+  )
+})
+
+const itemCategoryPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredItemCategoryRelations.value.length / ITEM_CATEGORY_PAGE_SIZE)),
 )
+
+const pagedItemCategoryRelations = computed(() => {
+  const start = (state.itemCategoryPage - 1) * ITEM_CATEGORY_PAGE_SIZE
+  return filteredItemCategoryRelations.value.slice(start, start + ITEM_CATEGORY_PAGE_SIZE)
+})
 
 watch(
   filteredItems,
@@ -85,11 +158,44 @@ watch(
 )
 
 watch(
-  () => state.filter,
+  () => state.itemCategoryFilter,
   () => {
-    state.currentPage = 1
+    state.itemCategoryPage = 1
   },
 )
+
+watch(
+  filteredItemCategoryRelations,
+  () => {
+    if (state.itemCategoryPage > itemCategoryPageCount.value) {
+      state.itemCategoryPage = itemCategoryPageCount.value
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  () => state.filter,
+  (value, oldValue) => {
+    state.currentPage = 1
+
+    if (!moduleConfig.value?.listQueryKey) {
+      return
+    }
+
+    if (oldValue && !value.trim()) {
+      loadModule(1)
+    }
+  },
+)
+
+function resetItemCategoryState() {
+  state.itemCategories = []
+  state.itemCategoryFilter = ''
+  state.itemCategoryPage = 1
+  state.itemCategoryTargetId = ''
+  state.itemCategoryReplacementTargets = {}
+}
 
 function resetForm() {
   if (!moduleConfig.value) {
@@ -98,6 +204,7 @@ function resetForm() {
 
   state.editingId = null
   state.form = createModuleForm(moduleConfig.value)
+  resetItemCategoryState()
 }
 
 function getModuleLookupKeys(module = moduleConfig.value) {
@@ -105,18 +212,21 @@ function getModuleLookupKeys(module = moduleConfig.value) {
     return []
   }
 
-  return [...new Set([
-    ...(module.lookupDeps || []),
-    ...module.fields
-      .map((field) => (field.optionsFrom === 'documentGroups' ? 'gameDocs' : field.optionsFrom))
-      .filter(Boolean),
-  ])]
+  return [
+    ...new Set([
+      ...(module.lookupDeps || []),
+      ...module.fields
+        .map((field) => (field.optionsFrom === 'documentGroups' ? 'gameDocs' : field.optionsFrom))
+        .filter(Boolean),
+    ]),
+  ]
 }
 
 async function ensureLookupOptions(keys, force = false) {
   const pending = [...new Set(keys)]
     .filter((key) => adminModuleMap[key])
     .filter((key) => force || !(state.lookupOptions[key] || []).length)
+
   if (!pending.length) {
     return
   }
@@ -151,7 +261,18 @@ async function ensureLookupOptions(keys, force = false) {
   })
 }
 
-async function loadModule(page = 1) {
+function buildListParams(page = 1) {
+  const params = { page }
+  const keyword = state.filter.trim()
+
+  if (moduleConfig.value?.listQueryKey && keyword) {
+    params[moduleConfig.value.listQueryKey] = keyword
+  }
+
+  return params
+}
+
+async function loadModule(page = 1, { preserveEdit = false } = {}) {
   if (!moduleConfig.value) {
     router.replace('/dashboard')
     return
@@ -161,18 +282,21 @@ async function loadModule(page = 1) {
 
   try {
     const response = await fetchResource(moduleConfig.value.endpoint, {
-      params: {
-        page,
-      },
+      params: buildListParams(page),
     })
+
     const pagedData = extractPagedData(response)
+    const listData = extractListData(response)
     const hasServerPagination = Array.isArray(response?.data?.results)
+
     state.serverPagination = hasServerPagination
     state.currentPage = page
-    state.total = hasServerPagination ? pagedData.count : extractListData(response).length
-    state.items = hasServerPagination ? pagedData.results : extractListData(response)
+    state.total = hasServerPagination ? pagedData.count : listData.length
+    state.items = hasServerPagination ? pagedData.results : listData
     state.lookupOptions[moduleConfig.value.key] = state.items
-    resetForm()
+    if (!preserveEdit) {
+      resetForm()
+    }
   } catch (error) {
     ElMessage.error(`${moduleConfig.value.label} 加载失败：${extractErrorMessage(error)}`)
   } finally {
@@ -180,10 +304,31 @@ async function loadModule(page = 1) {
   }
 }
 
+function handleListSearch() {
+  if (state.serverPagination || moduleConfig.value?.listQueryKey) {
+    loadModule(1)
+    return
+  }
+
+  state.currentPage = 1
+}
+
 async function startEdit(row) {
   state.editingId = row.id
   state.form = hydrateModuleForm(moduleConfig.value, row)
-  await ensureLookupOptions(getModuleLookupKeys())
+
+  try {
+    const tasks = [ensureLookupOptions(getModuleLookupKeys())]
+
+    if (isItemModule.value) {
+      tasks.push(ensureLookupOptions(['itemCategories']))
+      tasks.push(loadItemCategoryRelations(row.id))
+    }
+
+    await Promise.all(tasks)
+  } catch (error) {
+    ElMessage.error(`编辑数据加载失败：${extractErrorMessage(error)}`)
+  }
 }
 
 function handleFieldVisibleChange(field, visible) {
@@ -203,10 +348,7 @@ function handleFieldVisibleChange(field, visible) {
 
 function getFieldOptions(field) {
   if (field.optionsFrom === 'documentGroups') {
-    return [
-      { id: field.default ?? 0, name: '顶级文档组' },
-      ...documentGroupOptions.value,
-    ]
+    return [{ id: field.default ?? 0, name: '顶级文档组' }, ...documentGroupOptions.value]
   }
 
   if (field.optionsFrom) {
@@ -229,6 +371,15 @@ function formatValue(columnKey, value) {
     return '-'
   }
 
+  if (Array.isArray(value)) {
+    const names = value.map((item) => getEntityLabel(item)).filter(Boolean)
+    return names.length ? names.join('、') : '-'
+  }
+
+  if (typeof value === 'object') {
+    return getEntityLabel(value) || '-'
+  }
+
   if (columnKey.endsWith('_at')) {
     const date = new Date(value)
     return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
@@ -243,6 +394,7 @@ async function submitForm() {
   }
 
   state.saving = true
+
   try {
     const payload = normalizeModulePayload(moduleConfig.value, state.form)
     const response = state.editingId
@@ -281,11 +433,117 @@ function handlePageChange(page) {
   state.currentPage = page
 }
 
+function getItemCategoryId(item) {
+  return item?.category_id ?? item?.id ?? ''
+}
+
+function getItemCategoryName(item) {
+  return item?.category_name ?? item?.name ?? item?.introduction ?? item?.title ?? `#${getItemCategoryId(item)}`
+}
+
+function extractItemCategoryList(response) {
+  const directList = extractListData(response)
+  if (directList.length) {
+    return directList
+  }
+
+  const data = response?.data
+  if (Array.isArray(data?.categories)) {
+    return data.categories
+  }
+  if (Array.isArray(data?.item_categories)) {
+    return data.item_categories
+  }
+
+  return []
+}
+
+async function loadItemCategoryRelations(itemId = state.editingId) {
+  if (!itemId) {
+    resetItemCategoryState()
+    return
+  }
+
+  state.itemCategoryLoading = true
+
+  try {
+    const response = await fetchItemCategoryRelations(itemId)
+    state.itemCategories = extractItemCategoryList(response)
+    state.itemCategoryFilter = ''
+    state.itemCategoryPage = 1
+    state.itemCategoryReplacementTargets = {}
+  } catch (error) {
+    ElMessage.error(`道具分类绑定加载失败：${extractErrorMessage(error)}`)
+  } finally {
+    state.itemCategoryLoading = false
+  }
+}
+
+async function addCategoryBinding() {
+  if (!state.editingId || !state.itemCategoryTargetId) {
+    ElMessage.warning('请先选择要绑定的分类。')
+    return
+  }
+
+  try {
+    const response = await addItemCategoryRelation(state.editingId, {
+      category_id: Number(state.itemCategoryTargetId),
+    })
+    ElMessage.success(response?.msg || '分类绑定成功。')
+    state.itemCategoryTargetId = ''
+    await loadItemCategoryRelations()
+    await loadModule(state.currentPage, { preserveEdit: true })
+  } catch (error) {
+    ElMessage.error(`分类绑定失败：${extractErrorMessage(error)}`)
+  }
+}
+
+async function replaceCategoryBinding(row) {
+  if (!state.editingId) {
+    return
+  }
+
+  const currentId = getItemCategoryId(row)
+  const newId = state.itemCategoryReplacementTargets[currentId]
+
+  if (!currentId || !newId) {
+    ElMessage.warning('请先选择替换后的分类。')
+    return
+  }
+
+  try {
+    const response = await replaceItemCategoryRelation(state.editingId, currentId, {
+      new_category_id: Number(newId),
+    })
+    ElMessage.success(response?.msg || '分类替换成功。')
+    await loadItemCategoryRelations()
+    await loadModule(state.currentPage, { preserveEdit: true })
+  } catch (error) {
+    ElMessage.error(`分类替换失败：${extractErrorMessage(error)}`)
+  }
+}
+
+async function removeCategoryBinding(row) {
+  if (!state.editingId) {
+    return
+  }
+
+  try {
+    const response = await removeItemCategoryRelation(state.editingId, getItemCategoryId(row))
+    ElMessage.success(response?.msg || '分类解绑成功。')
+    await loadItemCategoryRelations()
+    await loadModule(state.currentPage, { preserveEdit: true })
+  } catch (error) {
+    ElMessage.error(`分类解绑失败：${extractErrorMessage(error)}`)
+  }
+}
+
 watch(
   () => route.params.moduleKey,
   () => {
     state.filter = ''
     state.currentPage = 1
+    resetItemCategoryState()
     loadModule()
   },
   { immediate: true },
@@ -303,8 +561,19 @@ watch(
           </div>
 
           <div class="header-actions">
-            <el-input v-model="state.filter" clearable placeholder="输入关键字过滤当前列表" />
-            <el-button :loading="state.loading" @click="loadModule">刷新列表</el-button>
+            <el-input
+              v-model="state.filter"
+              clearable
+              :placeholder="
+                moduleConfig.listQueryKey
+                  ? '输入名称后回车或点查询，走后端模糊搜索'
+                  : '输入关键词过滤当前页列表'
+              "
+              @keyup.enter="handleListSearch"
+            />
+            <el-button :loading="state.loading" @click="handleListSearch">
+              {{ moduleConfig.listQueryKey ? '查询列表' : '刷新列表' }}
+            </el-button>
           </div>
         </div>
       </template>
@@ -381,7 +650,7 @@ watch(
         <div class="card-header">
           <div>
             <strong>{{ state.editingId ? `编辑 #${state.editingId}` : `新建${moduleConfig.label}` }}</strong>
-            <p>当前页面使用统一表单和分页列表，关联下拉框也支持搜索与分页。</p>
+            <p>当前页面使用统一表单与分页列表，关联下拉框也支持搜索与分页。</p>
           </div>
         </div>
       </template>
@@ -440,6 +709,94 @@ watch(
           </el-button>
         </el-space>
       </el-form>
+
+      <div v-if="isItemModule && state.editingId" class="binding-panel">
+        <el-divider />
+
+        <div class="binding-header">
+          <div>
+            <strong>道具分类绑定</strong>
+            <p>当前编辑物品 #{{ state.editingId }}，可以新增、替换或删除分类绑定。</p>
+          </div>
+          <el-button :loading="state.itemCategoryLoading" @click="loadItemCategoryRelations()">
+            刷新绑定
+          </el-button>
+        </div>
+
+        <div class="binding-toolbar">
+          <PaginatedSelect
+            v-model="state.itemCategoryTargetId"
+            :options="itemCategoryOptions"
+            placeholder="选择要绑定的分类"
+            :option-label-fn="(item) => `#${item.id} ${item.name}`"
+            :search-keys="['name', 'id']"
+            @visible-change="(visible) => visible && ensureLookupOptions(['itemCategories'])"
+          />
+          <el-button type="primary" @click="addCategoryBinding">新增分类</el-button>
+        </div>
+
+        <el-input
+          v-model="state.itemCategoryFilter"
+          clearable
+          placeholder="过滤当前已绑定的分类"
+          class="binding-filter"
+        />
+
+        <el-table
+          v-loading="state.itemCategoryLoading"
+          :data="pagedItemCategoryRelations"
+          :row-key="getItemCategoryId"
+          border
+          empty-text="当前没有分类绑定"
+        >
+          <el-table-column label="分类ID" width="100">
+            <template #default="{ row }">
+              {{ getItemCategoryId(row) }}
+            </template>
+          </el-table-column>
+
+          <el-table-column label="分类名称" min-width="180">
+            <template #default="{ row }">
+              {{ getItemCategoryName(row) }}
+            </template>
+          </el-table-column>
+
+          <el-table-column label="替换为" min-width="280">
+            <template #default="{ row }">
+              <PaginatedSelect
+                v-model="state.itemCategoryReplacementTargets[getItemCategoryId(row)]"
+                :options="itemCategoryOptions"
+                placeholder="选择替换后的分类"
+                :option-label-fn="(item) => `#${item.id} ${item.name}`"
+                :search-keys="['name', 'id']"
+                @visible-change="(visible) => visible && ensureLookupOptions(['itemCategories'])"
+              />
+            </template>
+          </el-table-column>
+
+          <el-table-column label="操作" width="170" fixed="right">
+            <template #default="{ row }">
+              <el-space wrap>
+                <el-button size="small" @click="replaceCategoryBinding(row)">替换</el-button>
+                <el-button size="small" type="danger" plain @click="removeCategoryBinding(row)">
+                  删除
+                </el-button>
+              </el-space>
+            </template>
+          </el-table-column>
+        </el-table>
+
+        <div v-if="filteredItemCategoryRelations.length > ITEM_CATEGORY_PAGE_SIZE" class="pagination-wrap">
+          <el-pagination
+            background
+            layout="total, prev, pager, next"
+            :total="filteredItemCategoryRelations.length"
+            :page-size="ITEM_CATEGORY_PAGE_SIZE"
+            :current-page="state.itemCategoryPage"
+            @current-change="state.itemCategoryPage = $event"
+          />
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
@@ -456,25 +813,28 @@ watch(
   border-radius: 24px;
 }
 
-.card-header {
+.card-header,
+.binding-header {
   display: flex;
   justify-content: space-between;
   gap: 18px;
   align-items: flex-start;
 }
 
-.card-header strong {
+.card-header strong,
+.binding-header strong {
   color: #21160d;
   font-size: 20px;
 }
 
-.card-header p {
+.card-header p,
+.binding-header p {
   margin: 6px 0 0;
   color: #83715f;
 }
 
 .header-actions {
-  min-width: 280px;
+  min-width: 320px;
   display: flex;
   gap: 12px;
 }
@@ -506,6 +866,25 @@ watch(
   word-break: break-word;
 }
 
+.binding-panel {
+  margin-top: 24px;
+}
+
+.binding-toolbar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.binding-toolbar .paginated-select {
+  flex: 1;
+}
+
+.binding-filter {
+  margin-bottom: 14px;
+}
+
 .pagination-wrap {
   display: flex;
   justify-content: flex-end;
@@ -519,14 +898,13 @@ watch(
 }
 
 @media (max-width: 860px) {
+  .card-header,
+  .binding-header,
   .header-actions,
+  .binding-toolbar,
   .pagination-wrap {
     min-width: 0;
     width: 100%;
-    flex-direction: column;
-  }
-
-  .card-header {
     flex-direction: column;
   }
 }

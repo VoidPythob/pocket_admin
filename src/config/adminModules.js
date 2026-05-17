@@ -111,8 +111,9 @@ export const adminModules = [
     group: '宠物资料',
     label: '特性',
     endpoint: '/admin/features/',
-    description: '维护特性简介和详情。',
+    description: '维护特性简介与详情。',
     canDelete: true,
+    listQueryKey: 'name',
     tableColumns: [
       { key: 'id', label: 'ID' },
       { key: 'introduction', label: '简介' },
@@ -229,11 +230,13 @@ export const adminModules = [
     endpoint: '/admin/items/',
     description: '维护物品多语言名称与说明。',
     canDelete: true,
+    lookupDeps: ['itemCategories'],
     tableColumns: [
       { key: 'id', label: 'ID' },
       { key: 'name', label: '名称' },
       { key: 'jp_name', label: '日文名' },
       { key: 'en_name', label: '英文名' },
+      { key: 'categories', label: '分类' },
       { key: 'modified_at', label: '更新时间' },
     ],
     fields: [
@@ -250,7 +253,7 @@ export const adminModules = [
     group: '内容管理',
     label: '游戏文档',
     endpoint: '/admin/game-docs/',
-    description: '维护两级游戏文档目录与 Markdown 内容。',
+    description: '维护二级游戏文档目录与 Markdown 内容。',
     canDelete: true,
     tableColumns: [
       { key: 'id', label: 'ID' },

@@ -316,13 +316,9 @@ onMounted(() => {
       <el-row :gutter="18">
         <el-col :xs="24" :md="8">
           <el-form-item label="世代">
-            <PaginatedSelect
-              v-model="searchForm.generation_id"
-              :options="lookups.generations"
-              placeholder="请选择世代"
+            <PaginatedSelect v-model="searchForm.generation_id" :options="lookups.generations" placeholder="请选择世代"
               :option-label-fn="buildOptionLabel"
-              @visible-change="(visible) => visible && ensureLookup('generations')"
-            />
+              @visible-change="(visible) => visible && ensureLookup('generations')" />
           </el-form-item>
         </el-col>
         <el-col :xs="24" :md="10">
@@ -330,20 +326,12 @@ onMounted(() => {
             <el-input v-model="searchForm.name" placeholder="支持模糊搜索" @keyup.enter="submitSearch(1)" />
           </el-form-item>
         </el-col>
-        <el-col :xs="24" :md="6" class="search-action">
-          <el-button type="primary" :loading="petLoading" @click="submitSearch(1)">查询宠物</el-button>
-        </el-col>
+        <el-button type="primary" :loading="petLoading" @click="submitSearch(1)">查询宠物</el-button>
+
       </el-row>
 
-      <el-table
-        v-loading="petLoading"
-        :data="pets"
-        row-key="id"
-        border
-        highlight-current-row
-        empty-text="暂无符合条件的宠物"
-        @current-change="(row) => (selectedPetId = row ? String(row.id) : '')"
-      >
+      <el-table v-loading="petLoading" :data="pets" row-key="id" border highlight-current-row empty-text="暂无符合条件的宠物"
+        @current-change="(row) => (selectedPetId = row ? String(row.id) : '')">
         <el-table-column prop="id" label="ID" width="90" />
         <el-table-column prop="name" label="中文名" min-width="160" />
         <el-table-column prop="jp_name" label="日文名" min-width="160" show-overflow-tooltip />
@@ -356,14 +344,8 @@ onMounted(() => {
       </el-table>
 
       <div v-if="petPagination.total > petPagination.pageSize" class="pagination-wrap">
-        <el-pagination
-          background
-          layout="total, prev, pager, next, jumper"
-          :total="petPagination.total"
-          :page-size="petPagination.pageSize"
-          :current-page="petPagination.page"
-          @current-change="submitSearch"
-        />
+        <el-pagination background layout="total, prev, pager, next, jumper" :total="petPagination.total"
+          :page-size="petPagination.pageSize" :current-page="petPagination.page" @current-change="submitSearch" />
       </div>
     </el-card>
 
@@ -384,39 +366,21 @@ onMounted(() => {
       </el-radio-group>
 
       <div class="relation-toolbar">
-        <PaginatedSelect
-          v-model="addTargetId"
-          :options="currentOptions"
-          placeholder="请选择要新增的关系"
-          :option-label-fn="buildOptionLabel"
-          @visible-change="handleRelationOptionVisibleChange"
-        />
+        <PaginatedSelect v-model="addTargetId" :options="currentOptions" placeholder="请选择要新增的关系"
+          :option-label-fn="buildOptionLabel" @visible-change="handleRelationOptionVisibleChange" />
         <el-button type="primary" @click="addRelation">新增关系</el-button>
       </div>
 
-      <el-input
-        v-model="relationState.filter"
-        clearable
-        placeholder="过滤当前关系列表"
-        class="relation-filter"
-      />
+      <el-input v-model="relationState.filter" clearable placeholder="过滤当前关系列表" class="relation-filter" />
 
       <el-table v-loading="loading" :data="pagedRelations" row-key="pet_id" empty-text="暂无关系数据" border>
         <el-table-column prop="pet_name" label="宠物" min-width="160" />
-        <el-table-column
-          :prop="currentModule?.itemNameKey"
-          :label="currentModule?.label || '关系项'"
-          min-width="220"
-        />
+        <el-table-column :prop="currentModule?.itemNameKey" :label="currentModule?.label || '关系项'" min-width="220" />
         <el-table-column label="替换目标" min-width="320">
           <template #default="{ row }">
-            <PaginatedSelect
-              v-model="replacementTargets[row[currentModule.itemIdKey]]"
-              :options="currentOptions"
-              placeholder="选择替换目标"
-              :option-label-fn="buildOptionLabel"
-              @visible-change="handleRelationOptionVisibleChange"
-            />
+            <PaginatedSelect v-model="replacementTargets[row[currentModule.itemIdKey]]" :options="currentOptions"
+              placeholder="选择替换目标" :option-label-fn="buildOptionLabel"
+              @visible-change="handleRelationOptionVisibleChange" />
           </template>
         </el-table-column>
         <el-table-column label="操作" width="210" fixed="right">
@@ -430,14 +394,9 @@ onMounted(() => {
       </el-table>
 
       <div v-if="filteredRelations.length > RELATION_PAGE_SIZE" class="pagination-wrap">
-        <el-pagination
-          background
-          layout="total, prev, pager, next, jumper"
-          :total="filteredRelations.length"
-          :page-size="RELATION_PAGE_SIZE"
-          :current-page="relationState.page"
-          @current-change="relationState.page = $event"
-        />
+        <el-pagination background layout="total, prev, pager, next, jumper" :total="filteredRelations.length"
+          :page-size="RELATION_PAGE_SIZE" :current-page="relationState.page"
+          @current-change="relationState.page = $event" />
       </div>
     </el-card>
   </div>
@@ -499,6 +458,7 @@ onMounted(() => {
 }
 
 @media (max-width: 860px) {
+
   .relation-toolbar,
   .pagination-wrap {
     grid-template-columns: 1fr;

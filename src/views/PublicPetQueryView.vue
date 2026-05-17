@@ -34,6 +34,7 @@ const lookups = reactive({
   rances: [],
   skills: [],
   tags: [],
+  eggGroups: [],
 })
 
 const lookupEndpointMap = {
@@ -42,6 +43,7 @@ const lookupEndpointMap = {
   rances: '/admin/rances/',
   skills: '/admin/skills/',
   tags: '/admin/tags/',
+  eggGroups: '/admin/egg-groups/',
 }
 
 const lookupRequests = new Map()
@@ -72,6 +74,8 @@ const editForm = reactive({
   en_name: '',
   generation_id: '',
   rance_id: '',
+  gender_male_ratio: null,
+  egg_group_ids: [],
   feature_ids: [],
   skill_ids: [],
   tag_ids: [],
@@ -84,8 +88,21 @@ const featureOptions = computed(() => lookups.features)
 const ranceOptions = computed(() => lookups.rances)
 const skillOptions = computed(() => lookups.skills)
 const tagOptions = computed(() => lookups.tags)
+const eggGroupOptions = computed(() => lookups.eggGroups)
 const imageUploading = computed(() => uploadCount.value > 0)
 const lookupLoading = computed(() => lookupPendingCount.value > 0)
+const genderRatioText = computed(() => {
+  if (editForm.gender_male_ratio === null || editForm.gender_male_ratio === '') {
+    return '未设置雌雄比例'
+  }
+
+  const maleRatio = Number(editForm.gender_male_ratio)
+  if (Number.isNaN(maleRatio)) {
+    return '未设置雌雄比例'
+  }
+
+  return `雄性 ${maleRatio}% / 雌性 ${100 - maleRatio}%`
+})
 
 const tableRows = computed(() =>
   pets.value.map((row) => ({
@@ -205,6 +222,8 @@ function resetEditForm() {
   editForm.en_name = ''
   editForm.generation_id = ''
   editForm.rance_id = ''
+  editForm.gender_male_ratio = null
+  editForm.egg_group_ids = []
   editForm.feature_ids = []
   editForm.skill_ids = []
   editForm.tag_ids = []
@@ -429,6 +448,7 @@ async function openEditDialog(row) {
       ensureLookup('features'),
       ensureLookup('skills'),
       ensureLookup('tags'),
+      ensureLookup('eggGroups'),
     ])
 
     const detail = detailResponse?.data || {}
@@ -439,6 +459,15 @@ async function openEditDialog(row) {
     editForm.en_name = detail.en_name || row.en_name || ''
     editForm.generation_id = detail.generation_id ? String(detail.generation_id) : ''
     editForm.rance_id = detail.rance_id ? String(detail.rance_id) : ''
+    editForm.gender_male_ratio =
+      detail.gender_male_ratio === null || detail.gender_male_ratio === undefined
+        ? null
+        : Number(detail.gender_male_ratio)
+    editForm.egg_group_ids = Array.isArray(detail.egg_group_ids)
+      ? detail.egg_group_ids
+      : Array.isArray(detail.egg_groups)
+        ? detail.egg_groups.map((item) => item.id).filter(Boolean)
+        : []
     editForm.feature_ids = Array.isArray(detail.feature_ids) ? detail.feature_ids : []
     editForm.skill_ids = Array.isArray(detail.skill_ids) ? detail.skill_ids : []
     editForm.tag_ids = Array.isArray(detail.tag_ids)
@@ -479,6 +508,11 @@ async function savePet() {
       en_name: editForm.en_name.trim(),
       generation_id: Number(editForm.generation_id),
       rance_id: Number(editForm.rance_id),
+      gender_male_ratio:
+        editForm.gender_male_ratio === null || editForm.gender_male_ratio === ''
+          ? null
+          : Number(editForm.gender_male_ratio),
+      egg_group_ids: editForm.egg_group_ids.map(Number),
       feature_ids: editForm.feature_ids.map(Number),
       skill_ids: editForm.skill_ids.map(Number),
       tag_ids: editForm.tag_ids.map(Number),
@@ -788,6 +822,39 @@ onMounted(() => {
             </el-col>
           </el-row>
 
+          <el-row :gutter="18">
+            <el-col :xs="24" :md="12">
+              <el-form-item label="雌雄比例">
+                <el-input-number
+                  v-model="editForm.gender_male_ratio"
+                  :min="0"
+                  :max="100"
+                  :step="1"
+                  step-strictly
+                  controls-position="right"
+                  class="ratio-input"
+                  placeholder="填写雄性占比"
+                />
+                <div class="field-helper">{{ genderRatioText }}</div>
+              </el-form-item>
+            </el-col>
+            <el-col :xs="24" :md="12">
+              <el-form-item label="蛋组">
+                <PaginatedSelect
+                  v-model="editForm.egg_group_ids"
+                  multiple
+                  collapse-tags
+                  collapse-tags-tooltip
+                  :options="eggGroupOptions"
+                  placeholder="选择蛋组"
+                  :option-label-fn="(item) => `#${item.id} ${item.name}`"
+                  :search-keys="['name', 'id']"
+                  @visible-change="(visible) => visible && ensureLookup('eggGroups')"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+
           <el-form-item label="特性">
             <PaginatedSelect
               v-model="editForm.feature_ids"
@@ -1044,6 +1111,17 @@ onMounted(() => {
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.ratio-input {
+  width: 100%;
+}
+
+.field-helper {
+  margin-top: 8px;
+  color: #7e6c5a;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 @media (max-width: 768px) {

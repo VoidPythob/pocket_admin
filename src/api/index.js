@@ -229,6 +229,22 @@ export function removePetRelation(petId, segment, currentId) {
   return request.delete(`/admin/pets/${petId}/${segment}/${currentId}/`)
 }
 
+export function fetchItemCategoryRelations(itemId) {
+  return request.get(`/admin/items/${itemId}/categories/`)
+}
+
+export function addItemCategoryRelation(itemId, payload) {
+  return request.post(`/admin/items/${itemId}/categories/`, payload)
+}
+
+export function replaceItemCategoryRelation(itemId, currentId, payload) {
+  return request.put(`/admin/items/${itemId}/categories/${currentId}/`, payload)
+}
+
+export function removeItemCategoryRelation(itemId, currentId) {
+  return request.delete(`/admin/items/${itemId}/categories/${currentId}/`)
+}
+
 export function uploadAdminFile(file, fieldName = 'file') {
   const formData = new FormData()
   formData.append(fieldName, file)
